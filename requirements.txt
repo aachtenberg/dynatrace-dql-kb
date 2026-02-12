@@ -1,0 +1,13 @@
+# DQL RAG Pipeline - Dependencies
+#
+# Install with: pip install -r requirements.txt
+
+# Vector database (local, no server needed)
+chromadb>=0.4.22
+
+# Embedding model (runs locally, no API key needed for embeddings)
+sentence-transformers>=2.2.0
+
+# LLM API clients (install the one you need)
+anthropic>=0.39.0          # For Claude API
+openai>=1.12.0             # For OpenAI or Azure OpenAI API
