@@ -1,107 +1,95 @@
-# DQL RAG Pipeline
+# Dynatrace DQL Knowledge Base
 
-A local Retrieval-Augmented Generation system for Dynatrace Query Language. Ask questions in plain English, get accurate DQL queries back — grounded in your actual documentation and query examples.
+DQL reference docs, Copilot agents, and a RAG pipeline that make LLMs produce **working** Dynatrace Query Language instead of the usual hallucinated garbage.
 
-## How It Works
+## GitHub Copilot Agents
+
+Open this repo in VS Code with Copilot enabled. Two agents are available in Copilot Chat:
+
+### `@dql-expert`
+Writes syntactically correct DQL queries. Knows the critical rules that LLMs always get wrong:
+- Metrics use `timeseries`, never `fetch`
+- `by:` requires curly braces: `by:{host.name}`
+- No SQL syntax — DQL is pipe-based
+- `makeTimeseries` is only for logs/events/spans, not metrics
+- All common metric keys, aggregation functions, string functions, etc.
 
 ```
- "Show me hosts with high CPU"
-  │
-  ▼
- Embed question            (sentence-transformers, runs locally)
-  │
-  ▼
- Search ChromaDB           (cosine similarity, top-K chunks)
-  │
-  ▼
- Build prompt              (system + retrieved context + question)
-  │
-  ▼
- LLM API call              (Claude / OpenAI / Azure OpenAI / Ollama)
-  │
-  ▼
- DQL query + explanation
+@dql-expert show me hosts with CPU above 90% in the last hour
+@dql-expert error logs from the payment service grouped by host
+@dql-expert week-over-week CPU comparison
 ```
 
-1. **Ingest** — Documents in `docs/` are split into overlapping chunks (~800 tokens). Each chunk is embedded locally using a sentence-transformer model and stored in ChromaDB.
-2. **Retrieve** — Your question is embedded with the same model. ChromaDB returns the 6 most similar chunks via cosine similarity.
-3. **Generate** — Retrieved chunks are injected into the LLM system prompt as reference material. The LLM writes a DQL query grounded in the documentation.
+### `@dashboard-builder`
+Generates Grail/Platform dashboard JSON (the new format, not Classic). Knows the full tile schema, grid layout system, all visualization types, and Terraform deployment with `dynatrace_document`.
 
-## Quick Start
-
-### 1. Install
-
-```bash
-python -m venv venv
-source venv/bin/activate   # Linux/Mac
-# venv\Scripts\activate    # Windows
-
-pip install -r requirements.txt
+```
+@dashboard-builder create a host overview dashboard with CPU, memory, and error logs
+@dashboard-builder add a single-value tile showing total error count
 ```
 
-### 2. Set your API key
+### How it works
+Copilot picks up context from three layers in this repo:
 
-```bash
-# Pick one:
-export LLM_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
+| Layer | File | Scope |
+|-------|------|-------|
+| Global instructions | `.github/copilot-instructions.md` | Attached to every Copilot request |
+| File-type instructions | `.github/instructions/dql.instructions.md` | Applied when editing `.dql` or `.md` files |
+| File-type instructions | `.github/instructions/dashboard.instructions.md` | Applied when editing dashboard JSON |
+| Agents | `.github/agents/dql-expert.md` | Invoked with `@dql-expert` in Chat |
+| Agents | `.github/agents/dashboard-builder.md` | Invoked with `@dashboard-builder` in Chat |
 
-# OR
-export LLM_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-
-# OR (Azure)
-export LLM_PROVIDER=azure_openai
-export AZURE_OPENAI_ENDPOINT=https://your-instance.openai.azure.com/
-export AZURE_OPENAI_API_KEY=your-key
-export AZURE_OPENAI_DEPLOYMENT=gpt-4o
-
-# OR (Ollama - fully local, no API key needed)
-export LLM_PROVIDER=ollama
-export OLLAMA_MODEL=mistral-small3.2:24b   # any model you've pulled
-# export OLLAMA_BASE_URL=http://localhost:11434   # default
-```
-
-### 3. Ingest the docs
-
-```bash
-python dql_rag.py ingest
-```
-
-### 4. Ask questions
-
-```bash
-# Single query
-python dql_rag.py query "Show me error logs from the payment service in the last hour"
-
-# Interactive mode
-python dql_rag.py interactive
-```
+The `docs/` directory also serves as searchable workspace context when Copilot Chat is in Agent Mode.
 
 ## Knowledge Base
 
-The `docs/` directory contains the DQL reference material that powers the RAG pipeline:
+The `docs/` directory contains DQL reference material:
 
-| File | Description |
+| File | What's in it |
 |------|-------------|
-| `dql_syntax_reference.md` | DQL language reference — commands, functions, data types |
-| `dql_example_queries.md` | Working query examples (hosts, logs, spans, K8s, etc.) |
-| `dql_tips_and_patterns.md` | Common mistakes and best practices |
-| `dashboard_json_schema.md` | New Grail dashboard JSON format + Terraform deployment |
+| `dql_syntax_reference.md` | Commands, functions, operators, data types — the full language reference |
+| `dql_example_queries.md` | 40+ working query examples: hosts, logs, spans, K8s, entities, advanced patterns |
+| `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
+| `dql_wrong_vs_right.md` | 17 explicit wrong→right pairs for every hallucination LLMs produce |
+| `dashboard_json_schema.md` | Grail dashboard JSON format, tile types, visualizations, Terraform |
 
 ### Adding your own docs
 
-Drop files into `docs/` and re-run `python dql_rag.py ingest`. Supported formats: `.md`, `.txt`, `.dql`, `.json`, `.yaml`, `.yml`.
+Drop files into `docs/` — your team's DQL queries, metric keys, entity types, runbook snippets. The more real examples, the better the results. Supported formats: `.md`, `.txt`, `.dql`, `.json`, `.yaml`, `.yml`.
 
-Things worth adding:
-- Your team's existing DQL queries
-- Entity types and metric keys specific to your environment
-- Custom attributes and tags you use
-- Runbook DQL snippets
+## RAG Pipeline (Optional)
 
-## Configuration
+A standalone CLI tool that uses the same knowledge base with a local vector DB for retrieval-augmented generation.
 
-Edit the `Config` class in `dql_rag.py` or use environment variables:
+### Quick Start
+
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+./quickstart.sh
+```
+
+Or configure manually:
+
+```bash
+# Pick a provider:
+export LLM_PROVIDER=ollama                          # local
+export OLLAMA_MODEL=mistral-small3.2:24b
+export OLLAMA_BASE_URL=http://192.168.0.150:11434
+
+# OR
+export LLM_PROVIDER=anthropic && export ANTHROPIC_API_KEY=sk-ant-...
+
+# OR
+export LLM_PROVIDER=openai && export OPENAI_API_KEY=sk-...
+
+# Ingest and query:
+python dql_rag.py ingest
+python dql_rag.py query "Show me error logs from the payment service"
+python dql_rag.py interactive
+```
+
+### Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -111,20 +99,24 @@ Edit the `Config` class in `dql_rag.py` or use environment variables:
 | `CHUNK_OVERLAP` | `100` | Overlap between chunks |
 | `TOP_K` | `10` | Number of chunks to retrieve |
 
-## Tips
-
-- **Verbose mode** — In interactive mode, type `verbose` to see which chunks were retrieved and their relevance scores.
-- **Chunk tuning** — If answers miss relevant context, try increasing `TOP_K` or decreasing `CHUNK_SIZE`.
-- **Embeddings are free** — The sentence-transformer runs locally on CPU. You only pay for the LLM generation call.
-
 ## Project Structure
 
 ```
-├── dql_rag.py              # RAG pipeline (ingest, retrieve, generate)
-├── requirements.txt        # Python dependencies
-└── docs/                   # Knowledge base (ingested into ChromaDB)
-    ├── dql_syntax_reference.md
-    ├── dql_example_queries.md
-    ├── dql_tips_and_patterns.md
-    └── dashboard_json_schema.md
+├── .github/
+│   ├── copilot-instructions.md          # Global DQL rules for Copilot
+│   ├── instructions/
+│   │   ├── dql.instructions.md          # DQL file-type instructions
+│   │   └── dashboard.instructions.md    # Dashboard JSON instructions
+│   └── agents/
+│       ├── dql-expert.md                # @dql-expert agent
+│       └── dashboard-builder.md         # @dashboard-builder agent
+├── docs/                                # Knowledge base
+│   ├── dql_syntax_reference.md
+│   ├── dql_example_queries.md
+│   ├── dql_tips_and_patterns.md
+│   ├── dql_wrong_vs_right.md
+│   └── dashboard_json_schema.md
+├── dql_rag.py                           # RAG pipeline CLI
+├── quickstart.sh                        # Quick start (Ollama)
+└── requirements.txt                     # Python dependencies
 ```
