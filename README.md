@@ -61,7 +61,7 @@ The generic DQL grammar is complete, but LLMs will still hallucinate **metric ke
 
 ```
 -- All metric keys → paste into docs/metric_keys.md
-metrics | sort metricId asc
+metrics | sort metric.key asc
 
 -- Entity/log/span field discovery → paste into docs/entity_schemas.md
 fetch dt.entity.host | limit 1

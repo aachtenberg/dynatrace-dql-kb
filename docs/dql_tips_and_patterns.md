@@ -136,7 +136,7 @@ fetch dt.system.data_objects
 metrics
 
 // Find specific metrics
-metrics | filter contains(metricId, "cpu")
+metrics | filter contains(metric.key, "cpu")
 
 // Describe a table's schema
 describe logs

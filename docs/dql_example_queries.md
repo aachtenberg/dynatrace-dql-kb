@@ -427,16 +427,15 @@ fetch dt.entity.host
 ### Metric discovery — find all host metrics
 ```
 metrics
-| filter startsWith(metricId, "dt.host.")
-| fields metricId, description, unit
-| sort metricId asc
+| filter startsWith(metric.key, "dt.host.")
+| sort metric.key asc
 ```
 
 ### Metric discovery — find all service metrics
 ```
 metrics
-| filter startsWith(metricId, "dt.service.")
-| fields metricId, description, unit
+| filter startsWith(metric.key, "dt.service.")
+| sort metric.key asc
 ```
 
 ### Describe schema of a data source

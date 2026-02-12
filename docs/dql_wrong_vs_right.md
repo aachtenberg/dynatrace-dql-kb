@@ -22,7 +22,7 @@ timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}
 WRONG:
 ```
 fetch metrics
-| filter metricId == "dt.host.cpu.usage"
+| filter metric.key == "dt.host.cpu.usage"
 ```
 
 RIGHT (to query metric data):
@@ -32,7 +32,7 @@ timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}
 
 RIGHT (to discover available metrics):
 ```
-metrics | filter contains(metricId, "cpu")
+metrics | filter contains(metric.key, "cpu")
 ```
 
 ---
@@ -241,8 +241,8 @@ Common REAL metric keys:
 To discover metrics in your environment:
 ```
 metrics
-metrics | filter contains(metricId, "cpu")
-metrics | filter contains(metricId, "host")
+metrics | filter contains(metric.key, "cpu")
+metrics | filter contains(metric.key, "host")
 ```
 
 ---
@@ -380,3 +380,23 @@ fetch logs
 ```
 
 The first command (fetch, timeseries, data, metrics) does NOT have a pipe before it.
+
+---
+
+## 18. Using metricId instead of metric.key
+
+WRONG:
+```
+metrics | filter contains(metricId, "cpu")
+metrics | sort metricId asc
+metrics | fields metricId, description, unit
+```
+
+RIGHT:
+```
+metrics | filter contains(metric.key, "cpu")
+metrics | sort metric.key asc
+```
+
+The `metrics` command returns `metric.key` as the field containing the metric identifier — NOT `metricId`.
+The field `description` is also null in practice. Use `metric.key` for filtering and sorting.

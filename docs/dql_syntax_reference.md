@@ -110,10 +110,10 @@ timeseries curLogins = avg(custom.db.query), by:{query_name}, interval:1m
 metrics
 
 // Find metrics matching a pattern
-metrics | filter contains(metricId, "cpu")
+metrics | filter contains(metric.key, "cpu")
 
 // Get metadata for specific metric
-metrics | filter metricId == "dt.host.cpu.usage"
+metrics | filter metric.key == "dt.host.cpu.usage"
 ```
 
 ### makeTimeseries (for creating time series from NON-metric data):
@@ -862,4 +862,4 @@ dt.kubernetes.container.memory_usage  // K8s container memory
 dt.kubernetes.workload.requests_total // K8s workload request count
 ```
 
-Discover more metrics: `metrics | filter contains(metricId, "keyword")`
+Discover more metrics: `metrics | filter contains(metric.key, "keyword")`

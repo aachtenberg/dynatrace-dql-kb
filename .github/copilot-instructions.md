@@ -12,7 +12,7 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 | Business events | `fetch bizevents` | `fetch bizevents \| filter event.type == "com.example.purchase"` |
 | Spans/traces | `fetch spans` | `fetch spans \| filter span.kind == "server"` |
 | Entities | `fetch dt.entity.*` | `fetch dt.entity.host \| fields id, entity.name` |
-| Metric discovery | `metrics` | `metrics \| filter contains(metricId, "cpu")` |
+| Metric discovery | `metrics` | `metrics \| filter contains(metric.key, "cpu")` |
 | Chart logs/events over time | `makeTimeseries` (after fetch) | `fetch logs \| makeTimeseries count(), interval:5m` |
 | Lookup tables | `load` | `lookup [load dt.lookup.my_table], sourceField:key, lookupField:id` |
 | Schema/structure | `describe` | `describe logs` |
@@ -64,7 +64,7 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 - `dt.service.request.count`, `dt.service.request.response_time`, `dt.service.request.failure_count`
 - `dt.containers.cpu.usage`, `dt.containers.memory.usage`
 
-Discover more: `metrics | filter contains(metricId, "keyword")`
+Discover more: `metrics | filter contains(metric.key, "keyword")`
 
 ## Wrong → Right Quick Reference
 
@@ -81,6 +81,7 @@ Discover more: `metrics | filter contains(metricId, "keyword")`
 | `makeTimeseries avg(dt.host.cpu.usage)` | `timeseries avg(dt.host.cpu.usage)` | makeTimeseries is for logs/events |
 | `\| join [...], type:left` | `\| join [...], kind:leftOuter` | Join type param is `kind:`, values: inner, leftOuter, outer |
 | `host.name ~ "PROD*"` only | `host.name ~ "prod*"` | `~` operator is already case-insensitive |
+| `metrics \| filter contains(metricId, "cpu")` | `metrics \| filter contains(metric.key, "cpu")` | Field is `metric.key`, NOT `metricId` |
 
 ## Key Patterns
 

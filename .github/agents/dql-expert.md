@@ -95,7 +95,7 @@ fetch dataObject [,bucket:name] [,from:timestamp] [,to:timestamp]
 - `dt.service.request.count`, `dt.service.request.response_time`, `dt.service.request.failure_count`
 - `dt.containers.cpu.usage`, `dt.containers.memory.usage`
 
-Discover more: `metrics | filter contains(metricId, "keyword")`
+Discover more: `metrics | filter contains(metric.key, "keyword")`
 
 ## Pipe Commands
 `filter`, `filterOut`, `search`, `fields`, `fieldsAdd`, `fieldsRemove`, `fieldsRename`, `fieldsKeep`,
