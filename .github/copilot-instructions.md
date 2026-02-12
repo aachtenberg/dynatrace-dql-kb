@@ -14,6 +14,9 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 | Entities | `fetch dt.entity.*` | `fetch dt.entity.host \| fields id, entity.name` |
 | Metric discovery | `metrics` | `metrics \| filter contains(metricId, "cpu")` |
 | Chart logs/events over time | `makeTimeseries` (after fetch) | `fetch logs \| makeTimeseries count(), interval:5m` |
+| Lookup tables | `load` | `lookup [load dt.lookup.my_table], sourceField:key, lookupField:id` |
+| Schema/structure | `describe` | `describe logs` |
+| Topology nodes | `smartscapeNodes` | `smartscapeNodes type:HOST` |
 
 ## Critical Rules
 
@@ -76,6 +79,8 @@ Discover more: `metrics | filter contains(metricId, "keyword")`
 | `\| group by host.name` | `\| summarize count(), by:{host.name}` | No `group by` in DQL |
 | `timeseries dt.host.cpu.usage` | `timeseries avg(dt.host.cpu.usage)` | Aggregation required |
 | `makeTimeseries avg(dt.host.cpu.usage)` | `timeseries avg(dt.host.cpu.usage)` | makeTimeseries is for logs/events |
+| `\| join [...], type:left` | `\| join [...], kind:leftOuter` | Join type param is `kind:`, values: inner, leftOuter, outer |
+| `host.name ~ "PROD*"` only | `host.name ~ "prod*"` | `~` operator is already case-insensitive |
 
 ## Key Patterns
 
@@ -109,6 +114,25 @@ timeseries current=avg(dt.host.cpu.usage), by:{dt.entity.host}
 | join [timeseries lastWeek=avg(dt.host.cpu.usage), by:{dt.entity.host}, shift:-7d],
     on:{dt.entity.host}, fields:{lastWeek}
 ```
+
+## Additional Functions (beyond the basics above)
+- Math: `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `log()`, `log10()`, `exp()`
+- Time: `formatTimestamp()`, `timestampFromMillis()`, `timestampFromSeconds()`, `duration()`, `getHour()`, `getDay()`, `getMonth()`, `getYear()`, `getDayOfWeek()`
+- Array: `arraySize()`, `arrayFirst()`, `arrayLast()`, `arrayConcat()`, `arrayDistinct()`, `arrayContains()`, `arraySlice()`, `arraySort()`
+- Hash: `crc32()`, `md5()`, `sha1()`, `sha256()`, `sha512()`
+- Network: `ipAddr()`, `ipInSubnet()`, `ipIsPrivate()`, `ipIsPublic()`, `ipMask()`
+- Encoding: `encodeBase64()`, `decodeBase64ToString()`, `decodeBase64ToBinary()`
+- Entity: `entityName()`, `entityAttr()`, `classicEntitySelector()`
+- General: `exists()`, `typeof()`, `record()`, `isTrueOrNull()`
+- Conversion: `toBoolean()`, `toLong()`, `toDouble()`, `toString()`, `toTimestamp()`, `toDuration()`, `toIp()`, `toArray()`
+
+## Operators
+- Comparison: `==`, `!=`, `>`, `>=`, `<`, `<=` (tri-state: null comparisons return null)
+- Logical: `and`, `or`, `not` (tri-state boolean logic)
+- Arithmetic: `+`, `-`, `*`, `/` (long/long=long truncated), `%`
+- Pattern match: `~` (case-insensitive wildcard match: `host.name ~ "prod*web*"`)
+- Timestamp align: `@` (round down: `timestamp @ 1h`)
+- Array element: `[]` (element-wise ops on timeseries arrays: `100 - cpu[]`)
 
 For full syntax reference, see `docs/dql_syntax_reference.md`.
 For more examples, see `docs/dql_example_queries.md`.

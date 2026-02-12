@@ -62,14 +62,30 @@ When timeseries returns arrays, use `[]` for element-wise math:
 
 ## timeseries Syntax
 ```
-timeseries [name=]aggregation(metricKey [,scalar:true] [,default:val] [,rate:1s] [,filter:{...}]),
+timeseries [name=]aggregation(metricKey [,scalar:true] [,default:val] [,rate:1s] [,rollup:type] [,filter:{...}]),
     [by:{dim1, dim2}],
     [interval:duration],
+    [bins:number],
     [from:-duration],
     [to:timestamp],
+    [timeframe:timeframe],
     [shift:-duration],
-    [nonempty:true]
+    [nonempty:true],
+    [bucket:name]
 ```
+
+### timeseries parameter details
+- `rollup:type`: Independent time aggregation (e.g., `rollup:sum` to average the sums)
+- `bins:number`: Alternative to interval — specify number of time buckets
+- `bucket:name`: Filter to a specific Grail bucket
+
+### fetch syntax
+```
+fetch dataObject [,bucket:name] [,from:timestamp] [,to:timestamp]
+    [,timeframe:timeframe] [,samplingRatio:number] [,scanLimitGBytes:number]
+```
+- `samplingRatio:N`: Return 1/N of records
+- `scanLimitGBytes:N`: Stop after scanning N GB of data
 
 ## Common Metric Keys
 - `dt.host.cpu.usage`, `dt.host.cpu.system`, `dt.host.cpu.user`, `dt.host.cpu.idle`
@@ -82,26 +98,75 @@ timeseries [name=]aggregation(metricKey [,scalar:true] [,default:val] [,rate:1s]
 Discover more: `metrics | filter contains(metricId, "keyword")`
 
 ## Pipe Commands
-`filter`, `filterOut`, `fields`, `fieldsAdd`, `fieldsRemove`, `fieldsRename`, `fieldsKeep`,
+`filter`, `filterOut`, `search`, `fields`, `fieldsAdd`, `fieldsRemove`, `fieldsRename`, `fieldsKeep`,
 `sort`, `limit`, `summarize`, `dedup`, `parse`, `expand`, `fieldsFlatten`,
-`lookup`, `join`, `append`, `joinNested`, `makeTimeseries`, `fieldsSummary`
+`lookup`, `join`, `append`, `joinNested`, `makeTimeseries`, `fieldsSummary`, `traverse`
+
+### join types
+- Inner (default): `| join [subquery], on:{field}, fields:{field}`
+- Left outer: `| join [subquery], on:{field}, fields:{field}, kind:leftOuter`
+- Outer: `| join [subquery], on:{field}, fields:{field}, kind:outer`
+
+### search command
+Case-insensitive text search (must follow fetch): `fetch logs | search "OutOfMemory"`
 
 ## Aggregation Functions
 `count()`, `countIf(cond)`, `sum(f)`, `avg(f)`, `min(f)`, `max(f)`,
 `percentile(f, n)`, `median(f)`, `stddev(f)`, `variance(f)`,
-`countDistinct(f)`, `countDistinctApprox(f)`, `collectDistinct(f)`,
-`collectArray(f)`, `takeFirst(f)`, `takeLast(f)`, `takeAny(f)`
+`countDistinctExact(f)`, `countDistinctApprox(f)`, `collectDistinct(f)`,
+`collectArray(f)`, `correlation(f1, f2)`,
+`takeFirst(f)`, `takeLast(f)`, `takeAny(f)`, `takeMax(f)`, `takeMin(f)`
 
 ## String Functions
 `contains(f, "s")`, `startsWith(f, "s")`, `endsWith(f, "s")`,
 `matchesPhrase(f, "s")`, `matchesValue(f, "pattern")`,
-`lower(f)`, `upper(f)`, `trim(f)`, `substring(f, start, len)`,
-`indexOf(f, "s")`, `replace(f, "old", "new")`, `replaceAll(f, "old", "new")`,
-`concat(f1, f2)`, `strlen(f)`, `splitString(f, "delim")`
+`lower(f)`, `upper(f)`, `trim(f)`, `substring(f, start, end)`,
+`indexOf(f, "s")`, `replace(f, "old", "new")`, `replaceAll(f, "DPL", "new")`,
+`replacePattern(f, "regex", "new")`, `concat(f1, f2)`, `strlen(f)`, `splitString(f, "delim")`
 
 ## Conditional Functions
 `if(cond, then, else)`, `coalesce(f1, f2, default)`,
-`in(f, "v1", "v2")`, `isNull(f)`, `isNotNull(f)`
+`in(f, "v1", "v2")`, `isNull(f)`, `isNotNull(f)`, `isTrueOrNull(expr)`, `exists(f)`
+
+## Math Functions
+`abs(v)`, `ceil(v)`, `floor(v)`, `round(v, n)`, `pow(base, exp)`, `sqrt(v)`,
+`log(v)`, `log10(v)`, `exp(v)`
+
+## Time Functions
+`now()`, `bin(ts, 5m)`, `formatTimestamp(ts, "pattern")`, `toTimestamp(f)`,
+`timestampFromMillis(ms)`, `timestampFromSeconds(s)`, `duration(amount, unit)`,
+`getHour(ts)`, `getMinute(ts)`, `getDay(ts)`, `getDayOfWeek(ts)`, `getMonth(ts)`, `getYear(ts)`,
+`timeframe(from:ts, to:ts)`, `timeframeStart(tf)`, `timeframeEnd(tf)`
+
+## Array Functions
+`array(1,2,3)`, `arraySize(f)`, `arrayConcat(a1,a2)`, `arrayDistinct(f)`,
+`arrayFirst(f)`, `arrayLast(f)`, `arrayContains(f,val)`, `arraySlice(f,start,end)`,
+`arrayRemoveNulls(f)`, `arraySort(f)`
+
+## Conversion Functions
+`toBoolean(v)`, `toLong(v)`, `toDouble(v)`, `toString(v)`, `toTimestamp(v)`,
+`toDuration(v)`, `toIp(v)`, `toArray(v)`, `toRecord(v)`
+
+## Hash Functions
+`crc32(f)`, `md5(f)`, `sha1(f)`, `sha256(f)`, `sha512(f)`
+
+## Network/IP Functions
+`ipAddr(s)`, `ipInSubnet(ip,"cidr")`, `ipIsPrivate(ip)`, `ipIsPublic(ip)`,
+`ipIsLoopback(ip)`, `ipIsLinkLocal(ip)`, `ipMask(ip,len)`
+
+## Encoding Functions
+`encodeBase64(v)`, `decodeBase64ToString(v)`, `decodeBase64ToBinary(v)`
+
+## Entity Functions
+`entityName(id)`, `entityAttr(id, "attr")`, `classicEntitySelector("selector")`
+
+## Operators
+- Comparison: `==`, `!=`, `>`, `>=`, `<`, `<=`
+- Logical: `and`, `or`, `not` (tri-state: null propagates)
+- Arithmetic: `+`, `-`, `*`, `/`, `%`
+- Pattern match: `~` (case-insensitive wildcard: `host.name ~ "prod*"`)
+- Timestamp align: `@` (round down: `timestamp @ 1h`)
+- Array element: `[]` (element-wise on timeseries arrays)
 
 ## Key Patterns
 
