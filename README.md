@@ -52,6 +52,25 @@ The `docs/` directory contains DQL reference material:
 | `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
 | `dql_wrong_vs_right.md` | 17 explicit wrong→right pairs for every hallucination LLMs produce |
 | `dashboard_json_schema.md` | Grail dashboard JSON format, tile types, visualizations, Terraform |
+| `metric_keys.md` | **Your environment's** metric keys (populate from Notebooks — see below) |
+| `entity_schemas.md` | **Your environment's** entity/log/span field schemas (populate from Notebooks) |
+
+### Populate with your environment data
+
+The generic DQL grammar is complete, but LLMs will still hallucinate **metric keys** and **field names** because those are environment-specific. Fix this by running these queries in a Dynatrace Notebook and pasting the output into the placeholder files:
+
+```
+-- All metric keys → paste into docs/metric_keys.md
+metrics | fields metricId, description, unit | sort metricId asc
+
+-- Entity/log/span schemas → paste into docs/entity_schemas.md
+describe dt.entity.host
+describe dt.entity.service
+describe logs
+describe events
+describe spans
+describe bizevents
+```
 
 ### Adding your own docs
 
@@ -115,7 +134,9 @@ python dql_rag.py interactive
 │   ├── dql_example_queries.md
 │   ├── dql_tips_and_patterns.md
 │   ├── dql_wrong_vs_right.md
-│   └── dashboard_json_schema.md
+│   ├── dashboard_json_schema.md
+│   ├── metric_keys.md              # Your env's metrics (populate from Notebooks)
+│   └── entity_schemas.md           # Your env's schemas (populate from Notebooks)
 ├── dql_rag.py                           # RAG pipeline CLI
 ├── quickstart.sh                        # Quick start (Ollama)
 └── requirements.txt                     # Python dependencies
