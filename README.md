@@ -61,15 +61,16 @@ The generic DQL grammar is complete, but LLMs will still hallucinate **metric ke
 
 ```
 -- All metric keys → paste into docs/metric_keys.md
-metrics | fields metricId, description, unit | sort metricId asc
+metrics | sort metricId asc
 
--- Entity/log/span schemas → paste into docs/entity_schemas.md
-describe dt.entity.host
-describe dt.entity.service
-describe logs
-describe events
-describe spans
-describe bizevents
+-- Entity/log/span field discovery → paste into docs/entity_schemas.md
+fetch dt.entity.host | limit 1
+fetch dt.entity.service | limit 1
+fetch dt.entity.process_group | limit 1
+fetch logs | limit 1
+fetch events | limit 1
+fetch spans | limit 1
+fetch bizevents | limit 1
 ```
 
 ### Adding your own docs
