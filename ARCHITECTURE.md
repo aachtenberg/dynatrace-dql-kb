@@ -216,6 +216,11 @@ Treat that timestamp as the freshness of the metric/field data. Re-run
 `dt_fetch.py all` to refresh it. The hand-authored docs in `docs/` are not
 timestamped — they track the DQL language itself, which changes far more slowly.
 
+If you commit the generated docs to a shared repo, set `DT_REDACT_TENANT=1` so
+the header records a placeholder host (`https://<your-env>.apps.dynatrace.com`)
+instead of your real tenant URL. The committed samples here were generated that
+way.
+
 > Note: a near-empty test tenant will report very few metric keys (only
 > `dt.sfm.*` self-monitoring and `dt.billing.*`), because metric keys only exist
 > once something is being monitored. Entity/log/span **schemas** still populate
