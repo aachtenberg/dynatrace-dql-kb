@@ -3,7 +3,7 @@
 
 export LLM_PROVIDER=ollama
 export OLLAMA_BASE_URL=http://192.168.0.150:11434
-export OLLAMA_MODEL=mistral-small3.2:24b
+export OLLAMA_MODEL=qwen3.6:27b
 
 python dql_rag.py ingest
 python dql_rag.py interactive

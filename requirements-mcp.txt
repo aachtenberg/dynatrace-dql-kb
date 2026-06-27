@@ -1,0 +1,4 @@
+# MCP server dependencies — installs the base RAG deps plus the MCP SDK.
+# Use this (instead of requirements.txt) to run mcp_server.py.
+-r requirements.txt
+mcp>=1.2.0
