@@ -57,20 +57,46 @@ The `docs/` directory contains DQL reference material:
 
 ### Populate with your environment data
 
-The generic DQL grammar is complete, but LLMs will still hallucinate **metric keys** and **field names** because those are environment-specific. Fix this by running these queries in a Dynatrace Notebook and pasting the output into the placeholder files:
+The generic DQL grammar is complete, but LLMs will still hallucinate **metric keys** and **field names** because those are environment-specific. Populate the two placeholder docs (`docs/metric_keys.md`, `docs/entity_schemas.md`) from your live tenant.
+
+#### Automated — `dt_fetch.py` (recommended)
+
+Queries the Dynatrace Grail API directly and writes both docs. Stdlib only — no extra dependencies.
+
+```bash
+cp .env.example .env          # then fill in DT_ENVIRONMENT_URL and DT_API_TOKEN
+python dt_fetch.py test       # verify token + connectivity (one tiny query)
+python dt_fetch.py all        # populate metric_keys.md + entity_schemas.md
+# or individually: python dt_fetch.py metrics | schemas
+```
+
+`.env` config (also read from real environment variables):
+
+| Variable | Example | Notes |
+|----------|---------|-------|
+| `DT_ENVIRONMENT_URL` | `https://abc12345.apps.dynatrace.com` | Platform/apps URL, no trailing slash |
+| `DT_API_TOKEN` | `dt0c01...` or `dt0s16...` | Auth scheme auto-detected: classic API token (`dt0c01`) → `Api-Token`, platform token (`dt0s16`) → `Bearer` |
+
+Required Grail read scopes: `storage:metrics:read`, `storage:entities:read`, `storage:logs:read`, `storage:events:read`, `storage:bizevents:read`, `storage:spans:read`, `storage:buckets:read`.
+
+The script uses `describe <source>` for schemas (returns full field lists even when a source has no data), raises the API `maxResultRecords` so all metric keys come back, and dedups repeated keys. `.env` is gitignored — your token is never committed.
+
+#### Manual — Dynatrace Notebook
+
+Prefer copy-paste? Run these in a Notebook and paste the output into the placeholder files:
 
 ```
 -- All metric keys → paste into docs/metric_keys.md
 metrics | sort metric.key asc
 
 -- Entity/log/span field discovery → paste into docs/entity_schemas.md
-fetch dt.entity.host | limit 1
-fetch dt.entity.service | limit 1
-fetch dt.entity.process_group | limit 1
-fetch logs | limit 1
-fetch events | limit 1
-fetch spans | limit 1
-fetch bizevents | limit 1
+describe dt.entity.host
+describe dt.entity.service
+describe dt.entity.process_group
+describe logs
+describe events
+describe spans
+describe bizevents
 ```
 
 ### Adding your own docs
@@ -89,12 +115,27 @@ pip install -r requirements.txt
 ./quickstart.sh
 ```
 
+> **Prerequisite (Debian/Ubuntu):** the stdlib `venv`/`pip` flow needs the
+> `python3-venv` and `python3-pip` packages. If `python -m venv` fails with an
+> `ensurepip is not available` error, install them first:
+> ```bash
+> sudo apt install python3-venv python3-pip
+> ```
+
+**Alternative — [`uv`](https://github.com/astral-sh/uv)** (faster, no system pip needed):
+
+```bash
+uv venv && uv pip install -r requirements.txt
+uv run python dql_rag.py ingest
+uv run python dql_rag.py interactive
+```
+
 Or configure manually:
 
 ```bash
 # Pick a provider:
 export LLM_PROVIDER=ollama                          # local
-export OLLAMA_MODEL=mistral-small3.2:24b
+export OLLAMA_MODEL=qwen3.6:27b
 export OLLAMA_BASE_URL=http://192.168.0.150:11434
 
 # OR
@@ -139,6 +180,8 @@ python dql_rag.py interactive
 │   ├── metric_keys.md              # Your env's metrics (populate from Notebooks)
 │   └── entity_schemas.md           # Your env's schemas (populate from Notebooks)
 ├── dql_rag.py                           # RAG pipeline CLI
+├── dt_fetch.py                          # Populate env docs from a live Dynatrace tenant
+├── .env.example                         # Template for DT_ENVIRONMENT_URL / DT_API_TOKEN
 ├── quickstart.sh                        # Quick start (Ollama)
 └── requirements.txt                     # Python dependencies
 ```

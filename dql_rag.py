@@ -46,10 +46,10 @@ class Config:
 
     # Ollama (local)
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral-small3.2:24b")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.6:27b")
 
     # Model settings
-    ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+    ANTHROPIC_MODEL = "claude-sonnet-4-6"
     OPENAI_MODEL = "gpt-4o"
 
     # Embedding model (using sentence-transformers locally - no API key needed)
