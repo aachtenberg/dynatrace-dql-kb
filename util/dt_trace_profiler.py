@@ -22,10 +22,10 @@ Required token scopes: storage:spans:read, storage:buckets:read
 (+ storage:metrics:read for --metric-counts).
 
 Usage:
-    python dt_trace_profiler.py                       # 7-day lookback
-    python dt_trace_profiler.py --days 3 --out /tmp/profile.csv
-    python dt_trace_profiler.py --root-filter 'request.is_root_span == true'
-    python dt_trace_profiler.py --help
+    ./util/dt_trace_profiler.sh                       # 7-day lookback
+    ./util/dt_trace_profiler.sh --days 3 --out /tmp/profile.csv
+    ./util/dt_trace_profiler.sh --root-filter 'request.is_root_span == true'
+    ./util/dt_trace_profiler.sh --help
 
 The CSV contains real service and endpoint names from your tenant. It is
 gitignored by default; do not commit it to a shared repo.
@@ -36,6 +36,13 @@ import csv
 import statistics
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Launched as `python util/dt_trace_profiler.py`, so sys.path[0] is util/.
+# Put the repo root on the path to import dt_fetch.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import dt_fetch
 

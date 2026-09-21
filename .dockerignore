@@ -11,7 +11,7 @@ __pycache__
 !docs/*.md
 quickstart.sh
 dt_fetch.py
-dt_trace_profiler.py
+util/
 .gitignore
 .dockerignore
 Dockerfile

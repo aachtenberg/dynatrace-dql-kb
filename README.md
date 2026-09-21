@@ -101,14 +101,14 @@ describe spans
 describe bizevents
 ```
 
-## Trace profiling: `dt_trace_profiler.py`
+## Utility: trace profiler
 
-Ranks trace entry points by how often they run and flags the ones that look like batch jobs. Uses the same `.env` config and Grail client as `dt_fetch.py`, stdlib only.
+A utility, separate from the knowledge base and the MCP image. It ranks trace entry points by how often they run and flags the ones that look like batch jobs. The Python script reuses `dt_fetch.py`'s Grail client and `.env` config. Stdlib only. `util/dt_trace_profiler.sh` is a thin wrapper: it runs from the repo root and forwards every argument.
 
 ```bash
-python dt_trace_profiler.py                    # 7-day lookback, writes dt_trace_profile.csv
-python dt_trace_profiler.py --days 3 --metric-counts
-python dt_trace_profiler.py --help             # all options
+./util/dt_trace_profiler.sh                         # 7-day lookback, writes dt_trace_profile.csv
+./util/dt_trace_profiler.sh --days 3 --metric-counts
+./util/dt_trace_profiler.sh --help                  # all options
 ```
 
 It runs in three stages, aggregating in DQL wherever possible because Grail bills by data scanned:
@@ -291,7 +291,9 @@ python dql_rag.py interactive
 ├── mcp_server.py                        # MCP server (dql_search + dql_generate)
 ├── Dockerfile                           # Builds the MCP server image
 ├── dt_fetch.py                          # Populate env docs from a live Dynatrace tenant
-├── dt_trace_profiler.py                 # Rank trace entry points, flag likely batch jobs
+├── util/
+│   ├── dt_trace_profiler.py             # Rank trace entry points, flag likely batch jobs
+│   └── dt_trace_profiler.sh             # Wrapper; forwards args to the profiler
 ├── .env.example                         # Template for DT_ENVIRONMENT_URL / DT_API_TOKEN
 ├── quickstart.sh                        # Quick start (Ollama)
 ├── requirements.txt                     # Python dependencies (RAG CLI)
