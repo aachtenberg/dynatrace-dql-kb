@@ -21,3 +21,6 @@ Thumbs.db
 
 # Environment
 .env
+
+# dt_trace_profiler.py output (contains real service/endpoint names)
+dt_trace_profile*.csv

@@ -101,6 +101,39 @@ describe spans
 describe bizevents
 ```
 
+## Trace profiling: `dt_trace_profiler.py`
+
+Ranks trace entry points by how often they run and flags the ones that look like batch jobs. Uses the same `.env` config and Grail client as `dt_fetch.py`, stdlib only.
+
+```bash
+python dt_trace_profiler.py                    # 7-day lookback, writes dt_trace_profile.csv
+python dt_trace_profiler.py --days 3 --metric-counts
+python dt_trace_profiler.py --help             # all options
+```
+
+It runs in three stages, aggregating in DQL wherever possible because Grail bills by data scanned:
+
+| Stage | What it does | Cost |
+|-------|--------------|------|
+| 1. Profile | Run count and p50/p95 duration per entry point (service + endpoint + span kind) | One aggregated query over the window |
+| 2. Cadence | Pulls root-span start times and measures how regular the gaps between runs are, and how often runs start on a minute boundary | One scan per batch of ~150 entry points, only for entry points inside the `--min-runs`/`--max-runs` band |
+| 3. Shape | Counts total spans and DB spans for the three most recent runs of the top candidates | Narrow per-run windows sized from p95 duration |
+
+Each entry point gets a 0-6 score: non-server root span (+1), clockwork cadence (+2, or +1 if merely regular), minute-aligned starts (+1), p50 over 30s (+1), high span or DB fan-out (+1). Cadence regularity is MAD/median of the gaps between runs, so missed runs and weekday-only schedules still read as regular. Random traffic lands around 0.6-0.7; scheduled jobs sit near 0. Parallel root spans starting within 5s of each other count as one run.
+
+Required scopes: `storage:spans:read`, `storage:buckets:read`, plus `storage:metrics:read` for `--metric-counts`.
+
+Things to know:
+
+- **Span counts are sampled.** Adaptive capture drops traces on busy endpoints, so stage 1 undercounts the hottest ones. `--metric-counts` adds unsampled counts from `dt.service.request.count`. The endpoint dimension on that metric has changed across Dynatrace versions, so this stage fails soft if the query errors.
+- **Root definition.** The default `--root-filter` is `isNull(span.parent_id)`, meaning true trace roots. If an upstream system propagates W3C trace context into your services, jobs it triggers won't be roots; use `--root-filter 'request.is_root_span == true'` to profile per-service entry points instead.
+- **Retention.** Keep `--days` within your span retention. For weekly or monthly jobs, keep the CSVs from successive runs rather than widening the lookback.
+- **Truncation.** Grail notifications print to stderr. If stage 2 reports truncation, lower `--batch-size`; a truncated batch understates run counts.
+- **The CSV contains real service and endpoint names.** It is gitignored; don't commit it.
+- **Field names** assume OneAgent spans (`dt.entity.service`, `endpoint.name`, `db.system`, `span.kind`) with `coalesce` fallbacks for OTel `service.name` / `span.name`. Check `docs/entity_schemas.md` for your tenant after running `dt_fetch.py schemas`.
+
+The strongest validation is joining the output against your job scheduler's run history on host and start time. Entry points that score high but match no scheduled job are usually undocumented cron jobs or in-app timers.
+
 ### Adding your own docs
 
 Drop files into `docs/` — your team's DQL queries, metric keys, entity types, runbook snippets. The more real examples, the better the results. Supported formats: `.md`, `.txt`, `.dql`, `.json`, `.yaml`, `.yml`.
@@ -258,6 +291,7 @@ python dql_rag.py interactive
 ├── mcp_server.py                        # MCP server (dql_search + dql_generate)
 ├── Dockerfile                           # Builds the MCP server image
 ├── dt_fetch.py                          # Populate env docs from a live Dynatrace tenant
+├── dt_trace_profiler.py                 # Rank trace entry points, flag likely batch jobs
 ├── .env.example                         # Template for DT_ENVIRONMENT_URL / DT_API_TOKEN
 ├── quickstart.sh                        # Quick start (Ollama)
 ├── requirements.txt                     # Python dependencies (RAG CLI)

@@ -127,43 +127,64 @@ def _http_json(method: str, url: str, body: dict | None = None) -> dict:
         raise RuntimeError(f"Cannot reach {url}: {e.reason}") from None
 
 
-def run_dql(query: str) -> list[dict]:
-    """Execute a DQL query via the Grail API and return result records.
-    Handles the async execute -> poll flow."""
+def run_dql_result(
+    query: str,
+    *,
+    max_records: int = 100000,
+    start: str | None = None,
+    end: str | None = None,
+    timeout_s: float = POLL_TIMEOUT_SECONDS,
+) -> dict:
+    """Execute a DQL query via the Grail API and return the full `result`
+    object (records, types, metadata). Handles the async execute -> poll flow.
+
+    start / end are ISO-8601 timestamps sent as defaultTimeframeStart/End; they
+    apply when the query itself has no from:/to:. Use them to scan a narrow
+    window instead of paying for a wide one.
+    """
     execute_url = DT_ENVIRONMENT_URL + QUERY_EXECUTE_PATH
     # maxResultRecords: API defaults to 1000; raise it so large result sets
     # (e.g. all metric keys) come back complete rather than silently truncated.
     payload = {
         "query": query,
         "requestTimeoutMilliseconds": 30000,
-        "maxResultRecords": 100000,
+        "maxResultRecords": max_records,
     }
+    if start:
+        payload["defaultTimeframeStart"] = start
+    if end:
+        payload["defaultTimeframeEnd"] = end
     resp = _http_json("POST", execute_url, payload)
 
-    deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_s
     while True:
         state = resp.get("state")
         if state == "SUCCEEDED":
-            return resp.get("result", {}).get("records", []) or []
+            return resp.get("result", {}) or {}
         if state in ("FAILED", "CANCELLED", "ERROR"):
             raise RuntimeError(f"Query {state}: {json.dumps(resp)[:500]}")
         if state not in ("RUNNING", "NOT_STARTED"):
             # Some responses return the result inline with no explicit state
             if "result" in resp:
-                return resp["result"].get("records", []) or []
+                return resp["result"] or {}
             raise RuntimeError(f"Unexpected response: {json.dumps(resp)[:500]}")
 
         token = resp.get("requestToken")
         if not token:
             raise RuntimeError(f"RUNNING but no requestToken: {json.dumps(resp)[:500]}")
         if time.monotonic() > deadline:
-            raise RuntimeError(f"Query timed out after {POLL_TIMEOUT_SECONDS}s")
+            raise RuntimeError(f"Query timed out after {timeout_s}s")
         time.sleep(POLL_INTERVAL_SECONDS)
         poll_url = (
             DT_ENVIRONMENT_URL + QUERY_POLL_PATH
             + "?request-token=" + urllib.parse.quote(token)
         )
         resp = _http_json("GET", poll_url)
+
+
+def run_dql(query: str) -> list[dict]:
+    """Execute a DQL query via the Grail API and return result records."""
+    return run_dql_result(query).get("records", []) or []
 
 
 # ---------------------------------------------------------------------------
