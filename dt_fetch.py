@@ -110,7 +110,23 @@ def _auth_header() -> str:
     return f"Bearer {DT_API_TOKEN}"
 
 
-def _http_json(method: str, url: str, body: dict | None = None) -> dict:
+def _request_token(payload: dict, headers) -> str | None:
+    """Grail puts the poll token in the JSON body on some tenants and only in
+    the request-token response header on others. A RUNNING body with progress
+    and ttlSeconds and no requestToken is the header form."""
+    for key in ("requestToken", "request-token"):
+        if payload.get(key):
+            return payload[key]
+    for key in ("request-token", "x-request-token"):
+        value = headers.get(key)
+        if value:
+            return value
+    return None
+
+
+def _http_json(method: str, url: str, body: dict | None = None,
+               timeout: float = 90):
+    """Return (json body, response headers). Headers are lower-cased."""
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", _auth_header())
@@ -118,8 +134,11 @@ def _http_json(method: str, url: str, body: dict | None = None) -> dict:
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            payload = json.loads(raw) if raw.strip() else {}
+            headers = {k.lower(): v for k, v in resp.headers.items()}
+            return payload, headers
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="ignore")
         raise RuntimeError(f"HTTP {e.code} {e.reason} for {url}\n{detail}") from None
@@ -161,14 +180,21 @@ def run_dql_result(
         payload["defaultTimeframeStart"] = start
     if end:
         payload["defaultTimeframeEnd"] = end
-    resp = _http_json("POST", execute_url, payload)
+    resp, headers = _http_json("POST", execute_url, payload)
+    token = None
+    last_progress = None
 
     deadline = time.monotonic() + timeout_s
     while True:
+        token = _request_token(resp, headers) or token
         state = resp.get("state")
+        progress = resp.get("progress")
+        if progress is not None and progress != last_progress:
+            print(f"  [grail] {state} {progress}%", file=sys.stderr)
+            last_progress = progress
         if state == "SUCCEEDED":
             return resp.get("result", {}) or {}
-        if state in ("FAILED", "CANCELLED", "ERROR"):
+        if state in ("FAILED", "CANCELLED", "ERROR", "RESULT_GONE"):
             raise RuntimeError(f"Query {state}: {json.dumps(resp)[:500]}")
         if state not in ("RUNNING", "NOT_STARTED"):
             # Some responses return the result inline with no explicit state
@@ -176,17 +202,21 @@ def run_dql_result(
                 return resp["result"] or {}
             raise RuntimeError(f"Unexpected response: {json.dumps(resp)[:500]}")
 
-        token = resp.get("requestToken")
         if not token:
-            raise RuntimeError(f"RUNNING but no requestToken: {json.dumps(resp)[:500]}")
+            names = ", ".join(sorted(headers)) or "(none)"
+            raise RuntimeError(
+                "RUNNING but no requestToken in the body or request-token header: "
+                f"{json.dumps(resp)[:500]} (response headers: {names})"
+            )
         if time.monotonic() > deadline:
             raise RuntimeError(f"Query timed out after {timeout_s}s")
         time.sleep(POLL_INTERVAL_SECONDS)
         poll_url = (
             DT_ENVIRONMENT_URL + QUERY_POLL_PATH
             + "?request-token=" + urllib.parse.quote(token)
+            + "&request-timeout-milliseconds=20000"
         )
-        resp = _http_json("GET", poll_url)
+        resp, headers = _http_json("GET", poll_url, timeout=90)
 
 
 def run_dql(query: str) -> list[dict]:
