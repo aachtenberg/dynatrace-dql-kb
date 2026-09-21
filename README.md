@@ -103,7 +103,7 @@ describe bizevents
 
 ## Utility: trace profiler
 
-A utility, separate from the knowledge base and the MCP image. It ranks trace entry points by how often they run and flags the ones that look like batch jobs. The Python script reuses `dt_fetch.py`'s Grail client and `.env` config. Stdlib only. `util/dt_trace_profiler.sh` is a thin wrapper: it runs from the repo root and forwards every argument.
+A utility, separate from the knowledge base and the MCP image. It ranks trace entry points by how often they run and flags the ones that look like batch jobs. The Python script reuses `dt_fetch.py`'s Grail client and `.env` config. Stdlib only — no virtualenv and no pip install. `util/dt_trace_profiler.sh` is a thin wrapper: it runs from the repo root and forwards every argument. It uses the first interpreter that actually starts (`python3`, then `python`, then `py -3`), so Git Bash skips the Microsoft Store `python3` alias and uses the real `python`.
 
 ```bash
 ./util/dt_trace_profiler.sh                         # 7-day lookback, writes dt_trace_profile.csv
