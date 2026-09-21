@@ -54,6 +54,15 @@ EP = "coalesce(endpoint.name, span.name)"
 KEY_SEP = "\u241f"  # unit-separator glyph, will not appear in real names
 
 
+def scan_group(limit_gb: int) -> str:
+    """Fetch scan cap as a curly-brace parameter group.
+
+    Grail's default cap is 500 GB, and a fetch that crosses it is stopped.
+    The info parameter has to be grouped: {scanLimitGBytes: N}. -1 lifts the cap.
+    """
+    return ", {scanLimitGBytes: %d}" % int(limit_gb)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -67,8 +76,15 @@ def query(dql: str, **kw) -> list[dict]:
     instead of silently analysing partial data."""
     result = dt_fetch.run_dql_result(dql, **kw)
     notes = (result.get("metadata", {}).get("grail", {}) or {}).get("notifications") or []
+    stopped = None
     for n in notes:
-        log(f"  [grail] {n.get('severity', '')}: {n.get('message', '')}")
+        msg = n.get("message") or ""
+        log(f"  [grail] {n.get('severity', '')}: {msg}")
+        low = msg.lower()
+        if "scan" in low and any(w in low for w in ("stop", "limit", "exceed")):
+            stopped = msg
+    if stopped:
+        raise RuntimeError(f"Grail stopped the query at the scan limit: {stopped}")
     return result.get("records", []) or []
 
 
@@ -102,9 +118,9 @@ def num(v, cast=float, default=0):
 # Stage 1: profile
 # ---------------------------------------------------------------------------
 
-def stage_profile(days: int, root_filter: str) -> list[dict]:
+def stage_profile(days: int, root_filter: str, scan_limit_gb: int) -> list[dict]:
     dql = f"""
-fetch spans, from: now() - {days}d
+fetch spans, from: now() - {days}d{scan_group(scan_limit_gb)}
 | filter {root_filter}
 | fieldsAdd svc = {SVC}, svc_id = {SVC_ID}, ep = {EP}, kind = span.kind,
             dur_ms = toLong(duration) / 1000000.0
@@ -114,7 +130,7 @@ fetch spans, from: now() - {days}d
             by: {{svc, svc_id, ep, kind}}
 | sort runs desc
 """
-    rows = query(dql)
+    rows = query(dql, scan_limit_gbytes=scan_limit_gb, timeout_s=900)
     for r in rows:
         r["runs"] = num(r.get("runs"), int)
         r["p50_ms"] = num(r.get("p50_ms"))
@@ -141,21 +157,22 @@ timeseries total = sum(dt.service.request.count), from: now() - {days}d,
 # Stage 2: cadence
 # ---------------------------------------------------------------------------
 
-def stage_start_times(days, root_filter, eps, batch_size, max_records) -> dict:
+def stage_start_times(days, root_filter, eps, batch_size, max_records, scan_limit_gb) -> dict:
     """Root start times for many entry points, one scan per batch."""
     out: dict = {}
     for i in range(0, len(eps), batch_size):
         batch = eps[i:i + batch_size]
         keys = ", ".join(dql_str(f"{svc}{KEY_SEP}{ep}") for svc, ep in batch)
         dql = f"""
-fetch spans, from: now() - {days}d
+fetch spans, from: now() - {days}d{scan_group(scan_limit_gb)}
 | filter {root_filter}
 | fieldsAdd key = concat({SVC}, "{KEY_SEP}", {EP})
 | filter in(key, {{{keys}}})
 | fields key, ts = toLong(start_time), tid = toString(trace.id)
 """
         log(f"  batch {i // batch_size + 1}: {len(batch)} entry points")
-        for r in query(dql, max_records=max_records, timeout_s=900):
+        for r in query(dql, max_records=max_records, timeout_s=900,
+                       scan_limit_gbytes=scan_limit_gb):
             svc, _, ep = (r.get("key") or "").partition(KEY_SEP)
             out.setdefault((svc, ep), []).append((num(r.get("ts"), int), r.get("tid")))
     return out
@@ -192,18 +209,23 @@ def cadence(samples, burst_s: float = 5.0, align_tol_s: float = 10.0) -> dict:
 # Stage 3: shape
 # ---------------------------------------------------------------------------
 
-def stage_shape(recent, p95_ms: float):
+def stage_shape(recent, p95_ms: float, scan_limit_gb: int):
     """Median span and DB-span counts over a few recent runs, each queried in
     a window sized from the entry point's p95 so the scan stays small."""
     spans, dbs = [], []
     pad_ns = int(max(p95_ms * 1.5, 60_000) * 1e6) + 120 * 10**9
     for ts, tid in recent:
         dql = f"""
-fetch spans
+fetch spans{scan_group(scan_limit_gb)}
 | filter toString(trace.id) == {dql_str(tid)}
 | summarize spans = count(), db_spans = countIf(isNotNull(db.system))
 """
-        rows = query(dql, start=iso_ns(ts - 60 * 10**9), end=iso_ns(ts + pad_ns))
+        rows = query(
+            dql,
+            start=iso_ns(ts - 60 * 10**9),
+            end=iso_ns(ts + pad_ns),
+            scan_limit_gbytes=scan_limit_gb,
+        )
         if rows:
             spans.append(num(rows[0].get("spans"), int))
             dbs.append(num(rows[0].get("db_spans"), int))
@@ -269,13 +291,21 @@ def main():
                     help="top cadence candidates that get stage 3")
     ap.add_argument("--metric-counts", action="store_true",
                     help="add unsampled counts from dt.service.request.count")
+    ap.add_argument("--scan-limit-gb", type=int, default=-1,
+                    help="Grail fetch scan cap in GB, sent as "
+                         "{scanLimitGBytes: N}. Default -1 lifts the 500 GB "
+                         "stop so a no-arg 7-day run is not cancelled. A "
+                         "positive value stops the query at that many GB.")
     ap.add_argument("--out", default="dt_trace_profile.csv")
     a = ap.parse_args()
 
     dt_fetch._require_config()
 
+    cap = "no cap" if a.scan_limit_gb < 0 else f"{a.scan_limit_gb} GB"
+    log(f"scan limit {scan_group(a.scan_limit_gb).lstrip(', ')} ({cap}); "
+        "Grail otherwise stops a fetch at 500 GB")
     log(f"stage 1: profiling entry points over {a.days}d")
-    rows = stage_profile(a.days, a.root_filter)
+    rows = stage_profile(a.days, a.root_filter, a.scan_limit_gb)
     log(f"  {len(rows)} entry points")
 
     if a.metric_counts:
@@ -292,7 +322,7 @@ def main():
                    if a.min_runs <= r["runs"] <= a.max_runs})
     log(f"stage 2: cadence for {len(band)} entry points")
     starts = stage_start_times(a.days, a.root_filter, band,
-                               a.batch_size, a.max_records)
+                               a.batch_size, a.max_records, a.scan_limit_gb)
     for r in rows:
         smp = starts.get((r["svc"], r["ep"]))
         if smp:
@@ -303,7 +333,8 @@ def main():
                    key=lambda r: r["score"], reverse=True)[:a.shape_top]
     log(f"stage 3: shape for {len(cands)} candidates")
     for r in cands:
-        r["spans_med"], r["db_spans_med"] = stage_shape(r["recent"], r["p95_ms"])
+        r["spans_med"], r["db_spans_med"] = stage_shape(
+            r["recent"], r["p95_ms"], a.scan_limit_gb)
         r["score"], r["why"] = score(r)
 
     rows.sort(key=lambda r: (-r["score"], -r["runs"]))

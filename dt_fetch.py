@@ -134,6 +134,7 @@ def run_dql_result(
     start: str | None = None,
     end: str | None = None,
     timeout_s: float = POLL_TIMEOUT_SECONDS,
+    scan_limit_gbytes: int | None = None,
 ) -> dict:
     """Execute a DQL query via the Grail API and return the full `result`
     object (records, types, metadata). Handles the async execute -> poll flow.
@@ -141,6 +142,10 @@ def run_dql_result(
     start / end are ISO-8601 timestamps sent as defaultTimeframeStart/End; they
     apply when the query itself has no from:/to:. Use them to scan a narrow
     window instead of paying for a wide one.
+
+    scan_limit_gbytes sets defaultScanLimitGbytes. Grail otherwise stops a
+    fetch at 500 GB. -1 means no limit. A scanLimitGBytes clause inside the
+    DQL query overrides this value.
     """
     execute_url = DT_ENVIRONMENT_URL + QUERY_EXECUTE_PATH
     # maxResultRecords: API defaults to 1000; raise it so large result sets
@@ -150,6 +155,8 @@ def run_dql_result(
         "requestTimeoutMilliseconds": 30000,
         "maxResultRecords": max_records,
     }
+    if scan_limit_gbytes is not None:
+        payload["defaultScanLimitGbytes"] = scan_limit_gbytes
     if start:
         payload["defaultTimeframeStart"] = start
     if end:

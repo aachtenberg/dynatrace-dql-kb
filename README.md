@@ -128,7 +128,8 @@ Things to know:
 - **Span counts are sampled.** Adaptive capture drops traces on busy endpoints, so stage 1 undercounts the hottest ones. `--metric-counts` adds unsampled counts from `dt.service.request.count`. The endpoint dimension on that metric has changed across Dynatrace versions, so this stage fails soft if the query errors.
 - **Root definition.** The default `--root-filter` is `isNull(span.parent_id)`, meaning true trace roots. If an upstream system propagates W3C trace context into your services, jobs it triggers won't be roots; use `--root-filter 'request.is_root_span == true'` to profile per-service entry points instead.
 - **Retention.** Keep `--days` within your span retention. For weekly or monthly jobs, keep the CSVs from successive runs rather than widening the lookback.
-- **Truncation.** Grail notifications print to stderr. If stage 2 reports truncation, lower `--batch-size`; a truncated batch understates run counts.
+- **500 GB scan stop.** Grail cancels a `fetch` that would read more than 500 GB. A no-arg 7-day span scan crosses that on a busy tenant, so the profiler sends the cap as a curly-brace group, `{scanLimitGBytes: -1}`, which reads the whole window. `--scan-limit-gb 500` puts the stop back. That full scan is billable.
+- **Truncation.** Grail notifications print to stderr. If stage 2 reports truncation, lower `--batch-size`; a truncated batch understates run counts. A scan-limit stop aborts the run instead of writing a partial CSV.
 - **The CSV contains real service and endpoint names.** It is gitignored; don't commit it.
 - **Field names** assume OneAgent spans (`dt.entity.service`, `endpoint.name`, `db.system`, `span.kind`) with `coalesce` fallbacks for OTel `service.name` / `span.name`. Check `docs/entity_schemas.md` for your tenant after running `dt_fetch.py schemas`.
 
