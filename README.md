@@ -1,6 +1,8 @@
 # Dynatrace DQL Knowledge Base
 
-DQL reference docs, Copilot agents, and a RAG pipeline that make LLMs produce **working** Dynatrace Query Language instead of the usual hallucinated garbage.
+DQL reference docs, Copilot agents, an MCP server, and a RAG pipeline that make LLMs produce **working** Dynatrace Query Language instead of the usual hallucinated garbage.
+
+For when Copilot, Claude or ChatGPT confidently writes DQL that Dynatrace rejects — `fetch` on a metric, `by:` without braces, SQL keywords, invented metric keys. The knowledge base here is the grounding that stops it. Use it through [GitHub Copilot agents](#github-copilot-agents), through any MCP client (Claude Code, Claude Desktop, Cursor) via [`mcp_server.py`](mcp_server.py), or through the local RAG pipeline.
 
 > New here? [**ARCHITECTURE.md**](ARCHITECTURE.md) explains how it all fits together (with diagrams) and has a step-by-step how-to.
 
