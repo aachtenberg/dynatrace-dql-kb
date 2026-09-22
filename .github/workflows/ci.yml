@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # the version the Dockerfile pins
+      - run: pip install ruff
+
+      # Bugs only: undefined names, unused imports, syntax errors. Style rules
+      # (import order, percent-format, blind except) are deliberately NOT gated
+      # — this is an existing codebase, and reformatting churn in a knowledge
+      # base buys nothing and makes the prose diffs harder to review.
+      - name: ruff (bug rules)
+        run: ruff check --select F,E9 --output-format=concise .
+
+      - name: byte-compile every module
+        run: python -m compileall -q .

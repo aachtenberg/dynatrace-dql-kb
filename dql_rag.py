@@ -20,10 +20,8 @@ Usage:
 
 import os
 import sys
-import json
 import hashlib
 from pathlib import Path
-from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Configuration
