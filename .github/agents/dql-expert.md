@@ -175,8 +175,7 @@ Case-insensitive text search (must follow fetch): `fetch logs | search "OutOfMem
 **Enrich metrics with entity names:**
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
 ```

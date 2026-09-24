@@ -5,7 +5,8 @@
 #         docker run --rm -i \                   # + generation via Ollama
 #           -e LLM_PROVIDER=ollama \
 #           -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-#           -e OLLAMA_MODEL=qwen3.6:27b dql-kb-mcp
+#           -e OLLAMA_MODEL=qwen3:8b \
+#           -e OLLAMA_NUM_CTX=16384 dql-kb-mcp
 #
 # The server speaks MCP over stdio, so `-i` (interactive stdin) is required.
 

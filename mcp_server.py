@@ -23,15 +23,19 @@ import dql_rag
 from dql_rag import Config
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    # mcp 2 renamed FastMCP to MCPServer. mcp 1 still exports FastMCP.
+    from mcp.server.mcpserver import MCPServer
 except ImportError:
-    sys.stderr.write(
-        "The 'mcp' package is required. Install with: pip install -r requirements-mcp.txt\n"
-    )
-    raise
+    try:
+        from mcp.server.fastmcp import FastMCP as MCPServer
+    except ImportError:
+        sys.stderr.write(
+            "The 'mcp' package is required. Install with: pip install -r requirements-mcp.txt\n"
+        )
+        raise
 
 
-mcp = FastMCP("dql-kb")
+mcp = MCPServer("dql-kb")
 
 
 def _llm_configured() -> bool:
@@ -115,8 +119,8 @@ if _llm_configured():
 else:
     sys.stderr.write(
         "dql-kb MCP: dql_search only. The IDE model writes the query. "
-        "For dql_generate set LLM_PROVIDER=bedrock, or ollama / vllm / "
-        "openai_compatible for a private OpenAI-compatible server.\n"
+        "For dql_generate set LLM_PROVIDER=bedrock, ollama, vllm, or "
+        "openai_compatible.\n"
     )
 
 

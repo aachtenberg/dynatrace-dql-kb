@@ -488,8 +488,7 @@ lookup [subquery], sourceField:field, lookupField:field
 ```
 // Enrich metrics with entity names
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 
 // Lookup from a lookup table

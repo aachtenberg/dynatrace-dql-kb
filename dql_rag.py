@@ -230,8 +230,16 @@ def ingest_documents():
             metadatas=all_metadata[i:i + batch_size]
         )
 
+    # Upsert does not remove chunks whose text changed enough to get a new id.
+    existing = set(collection.get(include=[])["ids"])
+    stale = list(existing - set(all_ids))
+    if stale:
+        collection.delete(ids=stale)
+
     print(f"\nIngested {len(all_chunks)} chunks from "
           f"{len(set(m['source'] for m in all_metadata))} files.")
+    if stale:
+        print(f"Removed {len(stale)} stale chunks.")
     print(f"Vector DB stored at: {Config.CHROMA_DIR}")
 
 
