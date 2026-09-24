@@ -41,7 +41,7 @@ smartscapeEdges calls
 | fieldsAdd caller_id = source_id, caller = getNodeName(source_id)
 ```
 
-Services it calls: the same query with `source_id` filtered instead of `target_id`. From the node, callers are `traverse {calls}, {SERVICE}, direction:backward` and callees `direction:forward`. Unbraced `traverse calls, SERVICE` still returns rows, with a notice that the arguments should be in curly braces.
+Services it calls: the same query with `source_id` filtered instead of `target_id`. From the node, callers are `traverse {calls}, {SERVICE}, direction:backward` and callees `direction:forward`. Unbraced `traverse calls, PROCESS` still returns rows, with a notice that the arguments should be in curly braces. The same unbraced form on `SERVICE` runs and emits that notice.
 
 `lookup` keeps one match per span. Several callers need `join` or `joinNested` onto `smartscapeEdges calls`: match `service_id` to `target_id` for callers and to `source_id` for callees.
 
