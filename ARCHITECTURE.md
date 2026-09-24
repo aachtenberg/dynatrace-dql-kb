@@ -174,7 +174,7 @@ python dql_rag.py interactive
 ./util/dt_trace_profiler.sh --help
 ```
 
-The CSV it writes contains real service and endpoint names and is gitignored. See the [README](README.md#utility-trace-profiler) for stages, scoring, and caveats.
+The CSV it writes contains real service and endpoint names and is gitignored. See [util/README.md](util/README.md) for stages, scoring, and caveats.
 
 ### 5. Use the Copilot agents
 
