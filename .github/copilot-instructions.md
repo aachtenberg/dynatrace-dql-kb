@@ -11,6 +11,7 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 | Events | `fetch events` | `fetch events \| filter event.type == "K8S_EVENT"` |
 | Business events | `fetch bizevents` | `fetch bizevents \| filter event.type == "com.example.purchase"` |
 | Spans/traces | `fetch spans` | `fetch spans \| filter span.kind == "server"` |
+| Problems (issues, incidents, alerts) | `fetch dt.davis.problems` | `fetch dt.davis.problems, from:-7d \| filter event.status == "ACTIVE"` |
 | Entities | `fetch dt.entity.*` | `fetch dt.entity.host \| fields id, entity.name` |
 | Metric discovery | `metrics` | `metrics \| filter contains(metric.key, "cpu")` |
 | Chart logs/events over time | `makeTimeseries` (after fetch) | `fetch logs \| makeTimeseries count(), interval:5m` |

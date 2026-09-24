@@ -16,7 +16,7 @@ DQL queries are pipe-based. A starting command feeds into pipe commands:
 ```
 
 ## Starting Commands (no pipe before these)
-- `fetch <source>` — logs, events, bizevents, spans, dt.entity.*, dt.system.data_objects
+- `fetch <source>` — logs, events, bizevents, spans, dt.davis.problems (problems, a.k.a. issues or alerts), dt.entity.*, dt.system.data_objects
 - `timeseries <aggregation>(metricKey)` — metric time series data
 - `metrics` — list available metric keys
 - `data record(...)` — inline test data

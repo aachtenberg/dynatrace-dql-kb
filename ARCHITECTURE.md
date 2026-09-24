@@ -8,7 +8,7 @@ How the pieces fit, and how to run each one. The short version is the [README](R
 
 The repo keeps correct DQL in `docs/` and hands the relevant pages to whatever model is writing the query.
 
-Copilot reads the files directly. Search and generation go through a local vector store. Only the metric-key refresh and the trace profiler talk to Dynatrace.
+Copilot and the DQL agent read the files directly. Search and generation in `dql_rag.py` and the MCP server go through a local vector store. Three things talk to Dynatrace: the metric-key refresh, the trace profiler, and the DQL agent, which runs the queries it writes.
 
 ```mermaid
 flowchart TB
@@ -37,6 +37,7 @@ flowchart TB
         MCP["MCP server"]
         CLI["dql_rag.py query"]
         COPILOT["Copilot agents"]
+        DQLAGENT["util/dql_agent.py<br/>Bedrock model + tools"]
     end
     CHROMA --> MCP
     CHROMA --> CLI
@@ -46,15 +47,19 @@ flowchart TB
     AGENT(["Your agent"]) <-->|"dql_search or dql_generate"| MCP
     USER(["You"]) --> CLI
     USER --> COPILOT
+    USER --> DQLAGENT
+    AUTHORED -. "keyword search" .-> DQLAGENT
+    ENVDOCS -. "name lookup" .-> DQLAGENT
+    DQLAGENT -->|"runs DQL"| DT
 ```
 
 | Step | What happens | Talks to the network? |
 |------|----------------|------------------------|
 | Refresh | `dt_fetch.py` writes metric keys and field names from your tenant. The date is in the file header. | Your tenant only |
 | Index | `dql_rag.py ingest` splits `docs/` and stores vectors locally (`all-MiniLM-L6-v2`). No model API key. | Only while downloading the embedder the first time |
-| Ask | Copilot reads `docs/` as files. MCP and the CLI search the vector store. | The model call, if you turn generation on |
+| Ask | Copilot reads `docs/` as files. MCP and the CLI search the vector store. The DQL agent searches `docs/` by keyword and runs its queries on the tenant. | The model call, if you turn generation on. The DQL agent also calls Bedrock and your tenant |
 
-Copilot does not use the vector store. MCP and `dql_rag.py` do.
+Copilot and the DQL agent do not use the vector store. MCP and `dql_rag.py` do.
 
 ### What a question does
 
@@ -81,6 +86,29 @@ sequenceDiagram
         L-->>M: the query
         M-->>A: the query
     end
+```
+
+### What a question to the DQL agent does
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as You
+    participant G as dql_agent.py
+    participant B as Bedrock model
+    participant T as Your tenant
+
+    U->>G: "any open problems?"
+    G->>B: question + DQL rules (.github/agents/dql-expert.md)
+    B->>G: search_docs / find_names
+    G-->>B: matching docs, real field names
+    B->>G: run_dql "fetch dt.davis.problems, ..."
+    Note over G: local check for known mistakes;<br/>you approve, or say what to change
+    G->>T: the query
+    T-->>G: records, or Grail's error
+    G-->>B: records or error (the model fixes the query and retries)
+    B-->>G: answer from the records + the query
+    G-->>U: answer
 ```
 
 ---
@@ -184,7 +212,7 @@ The CSV it writes contains real service and endpoint names and is gitignored. Se
 ./util/dql_agent.sh
 ```
 
-No install. Each question is a loop of Converse calls: the model calls `search_docs`, `find_names` and `run_dql` until it can answer, at most 10 rounds. `run_dql` asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query. Setup, recipes and troubleshooting are in [util/dql_agent.md](util/dql_agent.md).
+No install. Each question is a loop of Converse calls: the model calls `search_docs`, `find_names` and `run_dql` until it can answer, at most 10 rounds. Every call carries `.github/agents/dql-expert.md` as its DQL rules. `run_dql` rejects known mistakes (SQL keywords, `fetch` on a metric, `by:` without braces) before Grail sees them, asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query. Setup, recipes and troubleshooting are in [util/dql_agent.md](util/dql_agent.md).
 
 ### 6. Use the Copilot agents
 

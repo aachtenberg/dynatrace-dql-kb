@@ -1,12 +1,14 @@
 # Dynatrace DQL Knowledge Base
 
-Models often write DQL that Dynatrace rejects: `fetch` on a metric, `by:` without braces, SQL keywords, made-up metric keys. This repo is the reference that keeps the query valid. Use it from VS Code, from any MCP client, or from the command line.
+Models often write DQL that Dynatrace rejects: `fetch` on a metric, `by:` without braces, SQL keywords, made-up metric keys. This repo is the reference that keeps the query valid. Use it from VS Code, from any MCP client, from the command line, or as a chat that runs the queries for you.
 
 ```mermaid
 flowchart TD
     Q["Your question"] --> IDE["VS Code"]
     Q --> MCP["MCP client"]
     Q --> CLI["dql_rag.py"]
+    Q --> Chat["util/dql_agent.sh"]
+    Chat --> Loop["A Bedrock model writes DQL, runs it on your tenant,<br/>and answers from the records"]
     IDE --> Agents["@dql-expert writes DQL<br/>@dashboard-builder writes a dashboard"]
     MCP --> Search["dql_search returns matching pages"]
     Search --> Own["The client's model writes the query"]
