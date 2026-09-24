@@ -38,7 +38,7 @@ class Config:
     #   vllm                 private vLLM (same API, default port 8000)
     #   openai_compatible    any other private server that speaks /v1/chat/completions
     # plus the public ones: anthropic, openai, azure_openai.
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "")
 
     # API Keys (set via environment variables)
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -344,6 +344,11 @@ def call_llm(query: str, context: str) -> str:
         return _call_openai_compatible(system, query)
     elif Config.LLM_PROVIDER == "bedrock":
         return _call_bedrock(system, query)
+    elif not Config.LLM_PROVIDER:
+        raise ValueError(
+            "LLM_PROVIDER is not set. Use dql_search from the IDE, or set "
+            "LLM_PROVIDER to bedrock, ollama, vllm, or openai_compatible."
+        )
     else:
         raise ValueError(f"Unknown LLM provider: {Config.LLM_PROVIDER}")
 

@@ -333,7 +333,7 @@ python dql_rag.py query "Show me error logs from the payment service"
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_PROVIDER` | `anthropic` | Leave unset for IDE-only use. `bedrock` is the Converse API. `ollama` uses native `/api/chat`. `vllm` and `openai_compatible` use `/v1/chat/completions`. |
+| `LLM_PROVIDER` | unset | Leave unset for IDE-only use. `bedrock` is the Converse API. `ollama` uses native `/api/chat`. `vllm` and `openai_compatible` use `/v1/chat/completions`. |
 | `OLLAMA_MODEL` | `qwen3:8b` | Best tag for DQL generation in the 2026-09-24 snapshot. See [evaluations/ollama-dql.md](evaluations/ollama-dql.md). |
 | `OLLAMA_NUM_CTX` | `16384` | Context window for the Ollama call. The server default is 4096, which truncates this prompt. |
 | `BEDROCK_MODEL_ID` | empty | Required for `bedrock`. Inference-profile id or foundation-model id. |

@@ -115,7 +115,7 @@ fetch dt.entity.host
 Use `lookup` to enrich metric data with entity names:
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 ```
 
 ## Iterative Expressions (operating on arrays)

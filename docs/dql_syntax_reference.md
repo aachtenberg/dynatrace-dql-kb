@@ -476,6 +476,8 @@ fetch dt.entity.host
 ### lookup
 Adds fields from a subquery by matching a source field to a lookup field.
 Only returns the first match.
+Looked-up fields are named `lookup.<field>` unless you pass `prefix` —
+use `prefix:""` to keep the original names (e.g. `entity.name`).
 
 Full syntax:
 ```
@@ -488,7 +490,7 @@ lookup [subquery], sourceField:field, lookupField:field
 ```
 // Enrich metrics with entity names
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fields entity.name, usage
 
 // Lookup from a lookup table

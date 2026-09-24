@@ -44,6 +44,6 @@ ENV HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
 # Retrieval needs no secrets. To enable dql_generate, pass LLM_PROVIDER + creds
-# at runtime (see header). Default provider is anthropic with no key => the
-# server offers dql_search only.
+# at runtime (see header). With LLM_PROVIDER unset the server offers
+# dql_search only.
 ENTRYPOINT ["python", "mcp_server.py"]

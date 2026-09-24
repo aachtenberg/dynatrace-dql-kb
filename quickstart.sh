@@ -69,7 +69,7 @@ echo "  ./util/dt_trace_profiler.sh --days 1 --shape-top 5 --min-runs 10 --max-r
 echo
 if [[ -f .env ]]; then
   echo "Found .env. Running one connectivity query..."
-  "${PY[@]}" dt_fetch.py test
+  "${PY[@]}" dt_fetch.py test || echo "Connectivity test failed. Check DT_ENVIRONMENT_URL and DT_API_TOKEN in .env."
 else
   echo "No .env yet. The docs already in this repo are enough to read and to use with Copilot."
 fi
