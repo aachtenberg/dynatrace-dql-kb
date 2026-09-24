@@ -35,11 +35,21 @@ mcp = FastMCP("dql-kb")
 
 
 def _llm_configured() -> bool:
-    """Whether dql_generate can actually call a model.
-    Ollama needs no key; the API providers need their key set."""
+    """Whether dql_generate can call a model outside the IDE.
+
+    The normal bank setup leaves this false: the IDE model calls dql_search
+    and writes the DQL itself. Outside the IDE, generation is either Bedrock
+    Converse or a private OpenAI-compatible server (Ollama, vLLM, or another).
+    """
     provider = Config.LLM_PROVIDER
+    if provider == "bedrock":
+        return bool(Config.BEDROCK_MODEL_ID)
     if provider == "ollama":
         return True
+    if provider == "vllm":
+        return bool(Config.VLLM_MODEL or Config.PRIVATE_MODEL)
+    if provider == "openai_compatible":
+        return bool(Config.PRIVATE_BASE_URL and Config.PRIVATE_MODEL)
     if provider == "anthropic":
         return bool(Config.ANTHROPIC_API_KEY)
     if provider == "openai":
@@ -104,8 +114,9 @@ if _llm_configured():
     )
 else:
     sys.stderr.write(
-        "dql-kb MCP: dql_search only (no LLM configured; set LLM_PROVIDER + key "
-        "to enable dql_generate)\n"
+        "dql-kb MCP: dql_search only. The IDE model writes the query. "
+        "For dql_generate set LLM_PROVIDER=bedrock, or ollama / vllm / "
+        "openai_compatible for a private OpenAI-compatible server.\n"
     )
 
 

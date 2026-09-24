@@ -8,6 +8,8 @@ chromadb>=0.4.22
 # Embedding model (runs locally, no API key needed for embeddings)
 sentence-transformers>=2.2.0
 
-# LLM API clients (install the one you need)
+# LLM API clients (install the one you need). Not used when the IDE model
+# writes the query from dql_search.
 anthropic>=0.39.0          # For Claude API
 openai>=1.12.0             # For OpenAI or Azure OpenAI API
+boto3>=1.35.0              # Amazon Bedrock Converse API

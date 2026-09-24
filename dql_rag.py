@@ -20,6 +20,7 @@ Usage:
 
 import os
 import sys
+import json
 import hashlib
 from pathlib import Path
 
@@ -30,7 +31,13 @@ from pathlib import Path
 class Config:
     """Central configuration - edit these values for your environment."""
 
-    # LLM Provider: "anthropic", "openai", "azure_openai", or "ollama"
+    # LLM Provider. Leave unset so the IDE model writes the query from dql_search.
+    # Outside the IDE, a bank will have one of:
+    #   bedrock              Amazon Bedrock Converse API
+    #   ollama               private Ollama (native /api/chat; /v1 ignores num_ctx)
+    #   vllm                 private vLLM (same API, default port 8000)
+    #   openai_compatible    any other private server that speaks /v1/chat/completions
+    # plus the public ones: anthropic, openai, azure_openai.
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
     # API Keys (set via environment variables)
@@ -42,9 +49,34 @@ class Config:
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 
-    # Ollama (local)
+    # Private inference. Ollama is called on native /api/chat so num_ctx is
+    # honored (its /v1 route ignores context size). vLLM and other servers
+    # use POST /v1/chat/completions. The key is ignored by Ollama and by
+    # vLLM unless that server was started with one.
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.6:27b")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    # Ollama's runtime default is a few thousand tokens. The system prompt plus
+    # retrieved chunks are larger than that, and the server silently drops the
+    # tail — which is where the knowledge base sits. 16384 covers that prompt
+    # and the 2048-token answer. Override if the GPU cannot hold it.
+    OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+    VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000")
+    VLLM_MODEL = os.getenv("VLLM_MODEL", "")
+    PRIVATE_BASE_URL = os.getenv("PRIVATE_BASE_URL", "")
+    PRIVATE_MODEL = os.getenv("PRIVATE_MODEL", "")
+    PRIVATE_API_KEY = os.getenv("PRIVATE_API_KEY", "")
+
+    # Amazon Bedrock Converse API. Credentials come from the standard AWS chain
+    # (SSO, IAM role, or env vars), not from a key stored in this repo.
+    # BEDROCK_MODEL_ID is the foundation-model id or, more often in a bank, the
+    # cross-region inference profile id the platform team enabled.
+    BEDROCK_REGION = (
+        os.getenv("BEDROCK_REGION")
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or "us-east-1"
+    )
+    BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
 
     # Model settings
     ANTHROPIC_MODEL = "claude-sonnet-4-6"
@@ -300,8 +332,10 @@ def call_llm(query: str, context: str) -> str:
         return _call_openai(system, query)
     elif Config.LLM_PROVIDER == "azure_openai":
         return _call_azure_openai(system, query)
-    elif Config.LLM_PROVIDER == "ollama":
-        return _call_ollama(system, query)
+    elif Config.LLM_PROVIDER in ("ollama", "vllm", "openai_compatible"):
+        return _call_openai_compatible(system, query)
+    elif Config.LLM_PROVIDER == "bedrock":
+        return _call_bedrock(system, query)
     else:
         raise ValueError(f"Unknown LLM provider: {Config.LLM_PROVIDER}")
 
@@ -350,19 +384,128 @@ def _call_azure_openai(system: str, query: str) -> str:
     return response.choices[0].message.content
 
 
-def _call_ollama(system: str, query: str) -> str:
-    from openai import OpenAI
-    client = OpenAI(
-        base_url=f"{Config.OLLAMA_BASE_URL}/v1",
-        api_key="ollama"  # required by client but unused by Ollama
+def _call_bedrock(system: str, query: str) -> str:
+    """Amazon Bedrock Converse API. boto3 is imported only when this runs."""
+    if not Config.BEDROCK_MODEL_ID:
+        raise RuntimeError(
+            "BEDROCK_MODEL_ID is not set. Use the model or inference-profile id "
+            "your platform team enabled, for example "
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0."
+        )
+    import boto3
+    client = boto3.client("bedrock-runtime", region_name=Config.BEDROCK_REGION)
+    response = client.converse(
+        modelId=Config.BEDROCK_MODEL_ID,
+        system=[{"text": system}],
+        messages=[{"role": "user", "content": [{"text": query}]}],
+        inferenceConfig={"maxTokens": 2048, "temperature": 0},
     )
+    parts = response.get("output", {}).get("message", {}).get("content") or []
+    texts = [p.get("text", "") for p in parts if p.get("text")]
+    if not texts:
+        raise RuntimeError("Bedrock Converse returned no text.")
+    return "\n".join(texts)
+
+
+def _v1_base(url: str) -> str:
+    """Accept either http://host:11434 or http://host:11434/v1."""
+    base = url.rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return base
+
+
+def openai_compatible_target() -> tuple[str, str, str]:
+    """(base_url, model, api_key) for a private OpenAI-compatible server."""
+    provider = Config.LLM_PROVIDER
+    if provider == "ollama":
+        return _v1_base(Config.OLLAMA_BASE_URL), Config.OLLAMA_MODEL, (
+            Config.PRIVATE_API_KEY or "ollama"
+        )
+    if provider == "vllm":
+        model = Config.VLLM_MODEL or Config.PRIVATE_MODEL
+        if not model:
+            raise RuntimeError(
+                "VLLM_MODEL is not set. Use the model name the vLLM server "
+                "was started with."
+            )
+        return _v1_base(Config.VLLM_BASE_URL), model, (
+            Config.PRIVATE_API_KEY or "EMPTY"
+        )
+    if not Config.PRIVATE_BASE_URL or not Config.PRIVATE_MODEL:
+        raise RuntimeError(
+            "PRIVATE_BASE_URL and PRIVATE_MODEL are required for "
+            "LLM_PROVIDER=openai_compatible. Point them at any server that "
+            "speaks POST /v1/chat/completions (Ollama, vLLM, or another)."
+        )
+    return _v1_base(Config.PRIVATE_BASE_URL), Config.PRIVATE_MODEL, (
+        Config.PRIVATE_API_KEY or "EMPTY"
+    )
+
+
+def _ollama_root() -> str:
+    """Host root for the native API. Accepts a URL that already ends in /v1."""
+    base = Config.OLLAMA_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base
+
+
+def _call_ollama(system: str, query: str) -> str:
+    """Native /api/chat. The OpenAI-compatible route ignores num_ctx, and
+    Ollama's default window (4096) is smaller than this prompt, so the
+    retrieved chunks were being discarded."""
+    import urllib.error
+    import urllib.request
+
+    body = {
+        "model": Config.OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": query},
+        ],
+        "stream": False,
+        "think": False,
+        "options": {
+            "num_ctx": Config.OLLAMA_NUM_CTX,
+            "temperature": 0,
+            "num_predict": 2048,
+        },
+    }
+    req = urllib.request.Request(
+        _ollama_root() + "/api/chat",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            payload = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:500]
+        raise RuntimeError(f"Ollama /api/chat failed ({exc.code}): {detail}") from exc
+    text = ((payload.get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("Ollama returned no content.")
+    return text
+
+
+def _call_openai_compatible(system: str, query: str) -> str:
+    """Chat completions against a private server. Ollama uses its native API
+    so the context window is applied; vLLM and other servers use /v1."""
+    if Config.LLM_PROVIDER == "ollama":
+        return _call_ollama(system, query)
+    base_url, model, api_key = openai_compatible_target()
+    from openai import OpenAI
+    client = OpenAI(base_url=base_url, api_key=api_key)
     response = client.chat.completions.create(
-        model=Config.OLLAMA_MODEL,
+        model=model,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": query}
+            {"role": "user", "content": query},
         ],
-        max_tokens=2048
+        max_tokens=2048,
+        temperature=0,
     )
     return response.choices[0].message.content
 

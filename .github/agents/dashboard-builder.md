@@ -29,31 +29,26 @@ You build Dynatrace Grail/Platform dashboards in JSON format. You use the NEW da
 
 ## Tile Types
 
-### Data Tile (DQL query)
+### Data tile — threshold table
 ```json
 {
   "type": "data",
-  "title": "CPU Usage",
-  "query": "timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}",
+  "title": "Hosts above 90% CPU",
+  "query": "timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h | filter usage > 90",
+  "visualization": "table",
+  "subType": "dql"
+}
+```
+
+### Data tile — line chart
+A chart over time has no `scalar:true`. Kubernetes container metrics group by `k8s.namespace.name`, not `dt.entity.cloud_application_namespace` or `dt.entity.kubernetes_namespace`.
+```json
+{
+  "type": "data",
+  "title": "Container CPU by namespace",
+  "query": "timeseries avg(dt.kubernetes.container.cpu_usage), by:{k8s.namespace.name}, from:-1h",
   "visualization": "lineChart",
-  "subType": "dql",
-  "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } },
-  "visualizationSettings": {
-    "thresholds": [],
-    "chartSettings": {
-      "gapPolicy": "connect",
-      "circleChartSettings": { "groupingThresholdType": "relative", "groupingThreshold": 0, "valueType": "relative" },
-      "categoryOverrides": {},
-      "fieldMapping": { "timestamp": "timeframe", "leftAxisValues": [], "leftAxisDimensions": [], "rightAxisValues": [], "rightAxisDimensions": [], "fields": [] },
-      "categoryColorAssignmentRules": [],
-      "colorPalette": "categorical"
-    },
-    "singleValue": { "showLabel": true, "label": "", "prefixIcon": "", "autoscale": true, "alignment": "center", "colorThresholdTarget": "value" },
-    "table": { "rowDensity": "condensed", "enableSparklines": false, "hiddenColumns": [], "lineWrapIds": [], "firstVisibleRowIndex": 0, "columnWidths": {} },
-    "unitsOverrides": [],
-    "honeycomb": { "shape": "hexagon", "legend": { "hidden": false, "position": "auto" }, "dataMappings": {}, "colorMode": "color-palette", "colorPalette": "blue" }
-  },
-  "queryConfig": { "version": "", "additionalFilters": {}, "selectArray": [] }
+  "subType": "dql"
 }
 ```
 
@@ -72,7 +67,14 @@ You build Dynatrace Grail/Platform dashboards in JSON format. You use the NEW da
 `"map"`, `"graph"`, `"davisAnalysis"`
 
 ## DQL Rules for Queries
-All `query` fields use DQL. Metrics use `timeseries`, not `fetch`. See the dql-expert agent for full DQL rules.
+The `query` string is DQL, and it has to carry every constraint from the request. A chart of CPU usage and a list of hosts above 90% are different queries.
+
+- Metrics use `timeseries`, never `fetch`.
+- `by:{...}` always has curly braces.
+- A time window goes on the `timeseries` command: `from:-1h`.
+- A threshold is a `filter` on a named scalar: `scalar:true`, then `| filter usage > 90`.
+- `fetch logs` for logs. Quote string values.
+- Kubernetes container metrics: `by:{k8s.namespace.name}`. Not an entity id.
 
 ## Variables
 ```json

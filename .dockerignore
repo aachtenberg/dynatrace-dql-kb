@@ -11,6 +11,7 @@ __pycache__
 !docs/*.md
 quickstart.sh
 dt_fetch.py
+dt_fetch.sh
 util/
 .gitignore
 .dockerignore

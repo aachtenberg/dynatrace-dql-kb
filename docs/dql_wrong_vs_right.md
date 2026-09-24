@@ -235,8 +235,8 @@ Common REAL metric keys:
 - dt.service.request.count
 - dt.service.request.response_time
 - dt.service.request.failure_count
-- dt.containers.cpu.usage
-- dt.containers.memory.usage
+- dt.kubernetes.container.cpu_usage
+- dt.kubernetes.container.memory_working_set
 
 To discover metrics in your environment:
 ```

@@ -62,7 +62,8 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 - `dt.host.disk.usage`, `dt.host.disk.io.read`, `dt.host.disk.io.write`
 - `dt.host.network.io.receive`, `dt.host.network.io.transmit`
 - `dt.service.request.count`, `dt.service.request.response_time`, `dt.service.request.failure_count`
-- `dt.containers.cpu.usage`, `dt.containers.memory.usage`
+- `dt.kubernetes.container.cpu_usage`, `dt.kubernetes.container.memory_working_set`, `dt.kubernetes.pods`
+- k3s: `contains(kubernetesVersion, "+k3s")`. `kubernetesDistribution` stays `KUBERNETES`.
 
 Discover more: `metrics | filter contains(metric.key, "keyword")`
 
@@ -87,11 +88,17 @@ Discover more: `metrics | filter contains(metric.key, "keyword")`
 
 **Enrich metrics with entity names:**
 ```
-timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
+timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
 | lookup [fetch dt.entity.host | fields id, entity.name],
     sourceField:dt.entity.host, lookupField:id
 | fields entity.name, usage
 | sort usage desc
+```
+
+**Kubernetes container CPU by namespace:**
+```
+timeseries cpu=avg(dt.kubernetes.container.cpu_usage, scalar:true), by:{k8s.namespace.name}, from:-1h
+| sort cpu desc
 ```
 
 **Multiple metrics on one chart (use append):**
