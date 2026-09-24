@@ -315,14 +315,17 @@ def _bedrock_hint(code: int, detail: str,
     low = detail.lower()
     if code == 403 and "security token" in low:
         return "The credentials are expired or wrong. Refresh them and try again."
+    if "not available for this account" in low or "access to the model" in low \
+            or "model access" in low:
+        return ("The model is not enabled for this AWS account; IAM is not the "
+                "problem. Ask your AWS team to enable it, or pick one the account "
+                "can use: ./util/dql_agent.sh --models, then set BEDROCK_MODEL_ID.")
     if code == 403 and action != "bedrock:InvokeModel":
         return (f"The identity is not allowed {action}. Ask your AWS team for the "
                 "model id instead; listing is optional.")
     if code == 403:
         return ("The identity needs bedrock:InvokeModel on this model (and on the "
                 "inference profile, if the id starts with us. or eu.).")
-    if "access to the model" in low or "model access" in low:
-        return "Ask your AWS admin to enable this model under Bedrock > Model access."
     if "on-demand throughput" in low or "inference profile" in low:
         return ("This model must be called through an inference profile. Try the "
                 "id with a us. or eu. prefix.")
@@ -630,6 +633,10 @@ class Agent:
         self.system = SYSTEM_PROMPT.format(
             run_step=RUN_STEP_ON if can_run else RUN_STEP_OFF)
         self.tools = [TOOL_SEARCH, TOOL_FIND] + ([TOOL_RUN] if can_run else [])
+        # Converse accepts toolResult.status only for Anthropic and Amazon Nova
+        # models; other providers reject the field.
+        self._status_supported = any(
+            k in bedrock.model_id for k in ("anthropic.", "amazon.nova"))
 
     def reset(self):
         self.messages = []
@@ -714,8 +721,10 @@ class Agent:
             results = []
             for use in uses:
                 out, status = self._call_tool(use.get("name", ""), use.get("input") or {})
-                results.append({"toolResult": {"toolUseId": use["toolUseId"],
-                                               "content": out, "status": status}})
+                result = {"toolUseId": use["toolUseId"], "content": out}
+                if self._status_supported:
+                    result["status"] = status
+                results.append({"toolResult": result})
             self.messages.append({"role": "user", "content": results})
         # Out of turns: ask for an answer with what it has.
         self.messages.append({"role": "user", "content": [{"text": (

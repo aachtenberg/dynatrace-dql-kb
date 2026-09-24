@@ -275,7 +275,8 @@ Create one `Agent` per user conversation. `approve="ask"` reads from the termina
 | `No AWS credentials found` | None of the sources in 2.4 | Set one; with SSO run `aws sso login` first |
 | `Bedrock HTTP 403 … security token` | Expired or wrong credentials | Paste fresh keys or sign in again |
 | `Bedrock HTTP 403 … not authorized … bedrock:InvokeModel` | IAM | Policy in 2.2, including the inference-profile ARN |
-| `… access to the model …` | Model not enabled in the account | Bedrock console > Model access |
+| `… is not available for this account` or `… access to the model …` | The model is not enabled for this AWS account (IAM is fine) | Ask the AWS team to enable it, or `--models` and set `BEDROCK_MODEL_ID` to one the account can use |
+| `model: … (default, looked up)` although you set `BEDROCK_MODEL_ID` | It was set on its own line without `export`, so the script cannot see it | `export BEDROCK_MODEL_ID=…`, put it in `.env`, or write it on the same line: `BEDROCK_MODEL_ID=… ./util/dql_agent.sh` |
 | `… on-demand throughput isn't supported …` | The model needs an inference profile | Use the `us.`/`eu.` id |
 | `Bedrock HTTP 404` / `identifier is invalid` | Wrong id, or the model is not in that region | Check `BEDROCK_MODEL_ID` and `BEDROCK_REGION` |
 | `Bedrock HTTP 429` | Throttled | Wait a minute; ask the AWS team about quotas |
