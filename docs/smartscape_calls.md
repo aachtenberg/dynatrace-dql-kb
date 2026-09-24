@@ -19,15 +19,14 @@ fetch spans, from:now()-1h
 | filter isNotNull(dt.entity.service)
 | lookup [
     smartscapeNodes SERVICE
-    | fields id, id_classic
+    | fields service_id = id, id_classic
   ],
   sourceField:dt.entity.service,
   lookupField:id_classic,
-  fields:{id}
-| fieldsAdd service_id = lookup.id
+  fields:{service_id}
 ```
 
-Not yet run against a tenant with `SERVICE` nodes. If `id_classic` turns out to be empty for types whose prefix did not change, use `toSmartscapeId()` for those.
+`fields:{id}` adds a column named `id`. `lookup.id` is not a field, and `prefix` cannot be combined with `fields`. The span query above parses and returns no rows here, because this tenant has no spans in the last hour. The same `lookup` against a `PROCESS` node, fed the classic `PROCESS_GROUP_INSTANCE-…` id, returned the `PROCESS-…` id.
 
 ## calls and called_by
 
@@ -42,10 +41,10 @@ smartscapeEdges calls
 | fieldsAdd caller_id = source_id, caller = getNodeName(source_id)
 ```
 
-Services it calls: the same query with `source_id` filtered instead of `target_id`. From the node, callers are `traverse calls, SERVICE, direction:backward` and callees `direction:forward`.
+Services it calls: the same query with `source_id` filtered instead of `target_id`. From the node, callers are `traverse {calls}, {SERVICE}, direction:backward` and callees `direction:forward`. Unbraced `traverse calls, SERVICE` still returns rows, with a notice that the arguments should be in curly braces.
 
 `lookup` keeps one match per span. Several callers need `join` or `joinNested` onto `smartscapeEdges calls`: match `service_id` to `target_id` for callers and to `source_id` for callees.
 
-`calls` edges also link processes (`source_type == "PROCESS"`). Swap the type filter to see those; that form ran on a tenant.
+No `SERVICE` nodes on this tenant, so the SERVICE queries above return no rows. The same statements against `PROCESS` returned callers through `target_id`, one callee through `source_id`, and both `traverse` directions. `getNodeName()` filled in the process name.
 
-On tenants moving off the classic entity model, `fetch dt.entity.service` can return nothing, and its `calls` / `called_by` records (listed in `entity_schemas.md`) are then not the path that returns data. Use the Smartscape edges above.
+On tenants moving off the classic entity model, `fetch dt.entity.service` can return nothing, and its `calls` / `called_by` records (listed in `entity_schemas.md`) are then not the path that returns data. That fetch returned no rows here and was flagged `CLASSIC_ENTITY_MIGRATION_ADVISED`. Use the Smartscape edges above.
