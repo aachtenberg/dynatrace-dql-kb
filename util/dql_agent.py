@@ -7,10 +7,12 @@ Standard library only: no pip, no Docker, no MCP. Bedrock requests are signed
 with SigV4 here, so boto3 is not needed. Grail queries reuse dt_fetch.py.
 
 Usage:
-    ./dql_agent.sh                      # interactive
-    ./dql_agent.sh "hosts with CPU above 90% in the last hour"
-    ./dql_agent.sh --check              # test credentials, model access and tenant
-    ./dql_agent.sh --help
+    ./util/dql_agent.sh                 # interactive
+    ./util/dql_agent.sh "hosts with CPU above 90% in the last hour"
+    ./util/dql_agent.sh --check         # test credentials, model access and tenant
+    ./util/dql_agent.sh --help
+
+Setup, recipes and troubleshooting: util/dql_agent.md
 
 Configuration (environment variables, or .env in the repo root):
     BEDROCK_MODEL_ID      required; the model or inference-profile id enabled
@@ -40,9 +42,14 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-import dt_fetch  # loads .env as a side effect
+# Launched as `python util/dql_agent.py`, so sys.path[0] is util/.
+# Put the repo root on the path to import dt_fetch.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-REPO_ROOT = Path(__file__).resolve().parent
+import dt_fetch  # noqa: E402  (loads .env as a side effect)
+
 DOCS_DIR = REPO_ROOT / "docs"
 DOC_SUFFIXES = {".md", ".txt", ".dql", ".json", ".yaml", ".yml"}
 
