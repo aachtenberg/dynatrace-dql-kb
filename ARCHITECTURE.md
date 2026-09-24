@@ -92,6 +92,7 @@ sequenceDiagram
 | `docs/` (written by hand) | Syntax, examples, Kubernetes, wrong-vs-right, dashboard schema | No |
 | `docs/metric_keys.md`, `docs/entity_schemas.md` | From your tenant | Written by `dt_fetch.py` |
 | `dt_fetch.py` | Pulls those two files from the Grail query API | Your tenant |
+| `dql_agent.py` | Bedrock model with tools: keyword search over `docs/`, exact name lookup, and DQL runs through `dt_fetch.py`'s client. Standard library only | Bedrock and your tenant |
 | `util/` | Trace profiler. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
 | `dql_rag.py` | Index, search, and an optional model call | The model call only |
 | `mcp_server.py` | Same search and generation, as MCP tools | Generation only |
@@ -176,7 +177,16 @@ python dql_rag.py interactive
 
 The CSV it writes contains real service and endpoint names and is gitignored. See [util/README.md](util/README.md) for stages, scoring, and caveats.
 
-### 5. Use the Copilot agents
+### 5. Ask your tenant through Bedrock
+
+```bash
+./dql_agent.sh --check
+./dql_agent.sh
+```
+
+No install. Each question is a loop of Converse calls: the model calls `search_docs`, `find_names` and `run_dql` until it can answer, at most 10 rounds. `run_dql` asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query. See the [README](README.md#ask-your-tenant-through-bedrock).
+
+### 6. Use the Copilot agents
 
 Open the repo in VS Code with Copilot enabled and use `@dql-expert` or
 `@dashboard-builder` in Copilot Chat. No build step — Copilot reads `.github/`
