@@ -65,10 +65,11 @@ dql> which hosts had CPU above 90% in the last hour?
   · run_dql:
       timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
       | filter usage > 90
-  Run this query? [Y/n]
+  Run it? [Y/n, or say what to change]
     2 records, 117.7 MB scanned
 ```
 
+- **Grounded in the repo's DQL skill:** every call carries `.github/agents/dql-expert.md` (the rules Copilot's `@dql-expert` uses), and each query is checked locally for the classic mistakes (`where`, `fetch` on a metric, `by:` without braces, a missing comma after `fetch <source>`) before Grail sees it.
 - **You approve every query** before it runs, unless you pass `--yes` or type `/auto`. `--no-run` only writes queries. Without `DT_ENVIRONMENT_URL` it writes queries and does not run them.
 - **Cost guard:** each query is capped at 50 GB scanned (`DQL_AGENT_SCAN_LIMIT_GB`), and the scanned size is shown after it runs.
 - **AWS credentials** are read from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`, then `~/.aws/credentials` (`AWS_PROFILE`), then `aws configure export-credentials` if the AWS CLI is installed (SSO and assumed roles). A Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` also works. The identity needs `bedrock:InvokeModel` on the model.
@@ -115,6 +116,7 @@ In Agent Mode, Copilot can also search `docs/`.
 | `kubernetes.md` | Container CPU, restarts, and how to tell a cluster is k3s |
 | `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
 | `dql_wrong_vs_right.md` | Wrong→right pairs for the mistakes models make |
+| `dql_common_questions.md` | Plain questions (open problems, high CPU, errors, Kubernetes) mapped to a query that runs |
 | `dashboard_json_schema.md` | Dashboard JSON, tile types, visualizations, Terraform |
 | `metric_keys.md` | **Your tenant's** metric keys |
 | `entity_schemas.md` | **Your tenant's** entity, log and span fields |

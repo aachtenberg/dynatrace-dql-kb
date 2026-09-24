@@ -104,6 +104,8 @@ Keys pasted from the portal expire, usually after 1–12 hours. Paste fresh ones
 
 This writes `docs/metric_keys.md` and `docs/entity_schemas.md`. The agent's `find_names` tool checks every metric key and field against these two files, so skipping this step makes it refuse or guess on your tenant's names.
 
+`entity_schemas.md` includes the fields of Davis problems (`dt.davis.problems`) and Davis events. Re-run `./dt_fetch.sh schemas` if yours was written before those sections were added.
+
 ## 3. Check it works
 
 ```bash
@@ -139,7 +141,19 @@ In interactive mode:
 | `/auto` | Stop asking before each query (toggle). |
 | `/help`, `/exit` | |
 
-Each tool call is printed as it happens. `run_dql` shows the query and asks `Run this query? [Y/n]`. Answer `n` to get the query without running it. After a query runs you see the record count and the bytes scanned.
+Each tool call is printed as it happens. `run_dql` shows the query and asks `Run it? [Y/n, or say what to change]`. Enter or `y` runs it. `n` stops, and the model asks what you want instead. Anything else you type goes to the model as an instruction, e.g. `only prod hosts` or `last 24h, not 7 days`. After a query runs you see the record count and the bytes scanned.
+
+Before asking you, the agent checks the query for the mistakes models make most (`where`, `select`, `fetch` on a metric key, `by:` without braces, `fetch logs from:-1h` without the comma). A query that fails the check is sent back to the model with the fix and is never run.
+
+### Where the agent's DQL knowledge comes from
+
+| Source | How it is used |
+|--------|----------------|
+| `.github/agents/dql-expert.md` | In the system prompt of every call. It is the same file Copilot's `@dql-expert` uses, so a rule added there helps both. |
+| `docs/` | `search_docs`. `docs/dql_common_questions.md` maps plain questions to a query that runs. |
+| `docs/metric_keys.md`, `docs/entity_schemas.md` | `find_names`, and the metric-key check above. Written by `./dt_fetch.sh all`. |
+
+To teach the agent something, add it to one of those files. There is no separate agent-only rule file.
 
 Flags:
 

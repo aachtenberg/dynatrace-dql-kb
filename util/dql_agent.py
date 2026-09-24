@@ -516,36 +516,98 @@ TOOL_RUN = {
     }
 }
 
-SYSTEM_PROMPT = """You answer questions about a Dynatrace environment by writing \
-and running DQL (Dynatrace Query Language).
+SKILL_FILE = REPO_ROOT / ".github" / "agents" / "dql-expert.md"
 
-Work this way:
-1. Before writing a query, call search_docs for the syntax or a similar \
-example, and find_names for every metric key and field name you plan to use. \
-Never guess one.
-2. {run_step}
-3. Answer in a few sentences, then give the final query in a ```dql block.
+CHAT_RULES = """You are a chat assistant for engineers who operate Dynatrace. \
+They ask plain questions ("any open problems?", "which hosts are hot?", \
+"errors in payments?"). You answer by writing DQL, running it on their tenant, \
+and reading the records. DQL is easy to get wrong and you will be tempted to \
+guess. Don't: the reference below, search_docs and find_names are the truth.
 
-DQL rules that are easy to get wrong:
-- Metrics use `timeseries`, never `fetch`. `fetch` is for logs, events, spans, \
-bizevents and dt.entity.* tables.
-- Grouping needs braces: `by:{{dt.entity.host}}`.
-- No SQL: no SELECT, WHERE, GROUP BY or JOIN keywords. Commands are piped with `|`.
-- `lookup` prefixes the fields it adds with `lookup.` unless you pass `prefix:""`.
-- Always bound the time range (from:-1h) and the rows (| limit 100).
-- Never add scanLimitGBytes to a query.
+How to work:
+1. Map the question to a data source. search_docs first; \
+docs/dql_common_questions.md maps common questions (problems, CPU, errors, \
+Kubernetes) to a query that runs. Start from that query and adapt it.
+2. Check every metric key and field name with find_names. Never invent one.
+3. {run_step}
+
+How to reply:
+- This is a chat. Be short. Lead with the answer from the records: a number, \
+or a compact table for lists (at most 15 rows, say if there are more). Then \
+the query that produced it in a ```dql block. No preamble.
+- If the question is vague, choose the sensible reading, run it, and say in \
+one line what you assumed.
+- Only show a query that ran, or one the user chose not to run.
+- If you cannot make a query work after three tries, show the last error in \
+one line and ask one question. Do not fall back to general advice about the \
+Dynatrace UI or REST API.
+- Never say a data source or field does not exist unless search_docs, \
+find_names or `describe` showed it. `fetch dt.system.data_objects` lists every \
+data source.
+- Always bound the time range (from:-1h) and rows (| limit). Never add \
+scanLimitGBytes.
 """
 
-RUN_STEP_ON = ("If the docs do not show the fields of the data you need, run "
-               "`describe logs` (or spans, events, bizevents, dt.entity.host, ...) "
-               "or `fetch logs, from:-15m | limit 3` first to see real names and "
-               "values. Then call run_dql with the query. If Grail returns an error, read it, "
-               "search_docs if needed, fix the query and run it again. If the "
-               "result is empty, say whether the query or the data is the likely "
-               "reason. Base the answer on the records, not on assumptions.")
-RUN_STEP_OFF = ("There is no tenant connection, so do not try to run the query. "
-                "Check it carefully against the docs instead, and if a metric "
-                "key or field name is not in them, say so.")
+RUN_STEP_ON = ("Run it with run_dql. When you need to see a source's real "
+               "fields, run `describe <source>` or `fetch <source>, from:-15m "
+               "| limit 3` first. If the query is rejected, read the error, fix "
+               "that exact problem and run it again. If the result is empty, "
+               "say whether the filter or the data is the likely reason.")
+RUN_STEP_OFF = ("There is no tenant connection, so the query cannot be run. "
+                "Check it against the docs line by line instead, and say that it "
+                "has not been run.")
+
+
+def _load_skill() -> str:
+    """The @dql-expert agent's rules, shared with Copilot: .github/agents/dql-expert.md."""
+    try:
+        return SKILL_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def build_system_prompt(can_run: bool) -> str:
+    rules = CHAT_RULES.replace("{run_step}", RUN_STEP_ON if can_run else RUN_STEP_OFF)
+    skill = _load_skill()
+    if skill:
+        rules += "\n\n# DQL reference (from .github/agents/dql-expert.md)\n\n" + skill
+    return rules
+
+
+# Mistakes models make over and over. Caught here, before Grail is asked, so
+# the model gets a precise correction instead of a parse error.
+_SQL = re.compile(r"(^|\|)\s*(select|where|group\s+by|order\s+by|having|join\s+\w+\s+on)\b",
+                  re.IGNORECASE | re.MULTILINE)
+_FETCH_NO_COMMA = re.compile(
+    r"\bfetch\s+[\w.]+\s+(from|to|bucket|timeframe|samplingRatio|scanLimitGBytes)\s*:")
+_FETCH_SOURCE = re.compile(r"\bfetch\s+([\w.]+)")
+_BY_NO_BRACES = re.compile(r"\bby\s*:\s*(?!\{)")
+_METRIC_PREFIXES = ("dt.host.", "dt.service.", "dt.containers.", "dt.kubernetes.",
+                    "dt.process.", "dt.cloud.", "dt.synthetic.", "dt.frontend.")
+_SQL_FIX = {"select": "fields", "where": "filter", "group by": "summarize ..., by:{...}",
+            "order by": "sort", "having": "filter after summarize",
+            "join": "join [subquery], on:{field}"}
+
+
+def lint_dql(query: str, metric_keys: set[str]) -> list[str]:
+    problems = []
+    for m in _SQL.finditer(query):
+        word = " ".join(m.group(2).lower().split()[:2])
+        word = "join" if word.startswith("join") else word
+        problems.append(f"`{m.group(2)}` is SQL; DQL uses `{_SQL_FIX.get(word, '?')}`.")
+    if _FETCH_NO_COMMA.search(query):
+        problems.append("Parameters after `fetch <source>` need a comma: "
+                        "`fetch logs, from:-1h`.")
+    for m in _FETCH_SOURCE.finditer(query):
+        src = m.group(1)
+        if src in metric_keys or (src.startswith(_METRIC_PREFIXES)):
+            problems.append(f"`{src}` is a metric. Use `timeseries avg({src}), ...`, "
+                            "not `fetch`.")
+    if _BY_NO_BRACES.search(query):
+        problems.append("`by:` needs braces: `by:{field}`.")
+    if "scanlimitgbytes" in query.lower():
+        problems.append("Remove scanLimitGBytes; the agent sets the scan limit.")
+    return problems
 
 
 def _fmt_bytes(n) -> str:
@@ -600,15 +662,28 @@ def run_dql_tool(query: str) -> tuple[dict, bool]:
 
 
 def _error_summary(error: str) -> str:
-    """Grail's own message when the error body is JSON, else the first line."""
+    """Grail's message plus its detail and position when the error body is
+    JSON (PARSE_ERROR alone says nothing), else the first line."""
     for line in error.splitlines()[1:]:
         try:
             body = json.loads(line)
         except ValueError:
             continue
-        msg = (body.get("error") or {}).get("message") if isinstance(body, dict) else None
-        if msg:
-            return msg[:300]
+        err = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(err, dict):
+            continue
+        details = err.get("details") or {}
+        parts = [err.get("message") or ""]
+        if details.get("errorMessage") and details["errorMessage"] != parts[0]:
+            parts.append(details["errorMessage"])
+        pos = (details.get("syntaxErrorPosition") or {}).get("start") or {}
+        if pos.get("line") is not None:
+            parts.append(f"(line {pos.get('line')}, column {pos.get('column')})")
+        text = ": ".join(p for p in parts[:2] if p)
+        if len(parts) > 2:
+            text += " " + parts[2]
+        if text:
+            return text[:500]
     return error.splitlines()[0][:300] if error else "unknown error"
 
 
@@ -630,8 +705,9 @@ class Agent:
         self.approve = approve        # "ask", "always", "never"
         self.messages: list[dict] = []
         self.last_query: str | None = None
-        self.system = SYSTEM_PROMPT.format(
-            run_step=RUN_STEP_ON if can_run else RUN_STEP_OFF)
+        self.system = build_system_prompt(can_run)
+        self.metric_keys = {e.split()[-1] for e in self.names.entries
+                            if e.startswith("metric ")}
         self.tools = [TOOL_SEARCH, TOOL_FIND] + ([TOOL_RUN] if can_run else [])
         # Converse accepts toolResult.status only for Anthropic and Amazon Nova
         # models; other providers reject the field.
@@ -641,16 +717,22 @@ class Agent:
     def reset(self):
         self.messages = []
 
-    def _approved(self, query: str) -> bool:
+    def _approval(self, query: str) -> tuple[bool, str]:
+        """(run it, what the user said instead). Anything other than y/n is
+        taken as an instruction for the model."""
         if self.approve == "always":
-            return True
+            return True, ""
         if self.approve == "never" or not sys.stdin.isatty():
-            return False
+            return False, ""
         try:
-            ans = input("  Run this query? [Y/n] ").strip().lower()
+            ans = input("  Run it? [Y/n, or say what to change] ").strip()
         except EOFError:
-            return False
-        return ans in ("", "y", "yes")
+            return False, ""
+        if ans.lower() in ("", "y", "yes"):
+            return True, ""
+        if ans.lower() in ("n", "no"):
+            return False, ""
+        return False, ans
 
     def _call_tool(self, name: str, args: dict) -> tuple[list, str]:
         if name == "search_docs":
@@ -679,16 +761,28 @@ class Agent:
             q = str(args.get("query", "")).strip()
             self.last_query = q
             _say("  · run_dql:\n" + "\n".join("      " + ln for ln in q.splitlines()))
-            if not self._approved(q):
+            issues = lint_dql(q, self.metric_keys)
+            if issues:
+                _say("    not run: " + " ".join(issues))
+                return [{"text": "Not run; fix these and call run_dql again:\n- "
+                                 + "\n- ".join(issues)}], "error"
+            run, said = self._approval(q)
+            if not run:
                 _say("    skipped")
-                return [{"text": "The user did not run this query. Give them the "
-                                 "query and say what it should return."}], "error"
+                if said:
+                    return [{"text": f"Not run. The user said: {said}\n"
+                                     "Change the query accordingly."}], "error"
+                return [{"text": "Not run; the user declined. Stop calling tools "
+                                 "and ask, in one short sentence, what to change."}], \
+                    "error"
             result, ok = run_dql_tool(q)
             if ok:
                 _say(f"    {result['record_count']} records, "
                      f"{result['scanned']} scanned")
             else:
-                _say("    error: " + _error_summary(result["error"]))
+                summary = _error_summary(result["error"])
+                _say("    error: " + summary)
+                result = {"error": summary, "raw": result["error"][:2000]}
             return [{"text": json.dumps(result, default=str)}], \
                 "success" if ok else "error"
 

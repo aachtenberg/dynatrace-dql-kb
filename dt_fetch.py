@@ -278,6 +278,8 @@ SCHEMA_SOURCES = [
     ("Events", "events"),
     ("Spans", "spans"),
     ("Business Events", "bizevents"),
+    ("Davis Problems (dt.davis.problems)", "dt.davis.problems"),
+    ("Davis Events (dt.davis.events)", "dt.davis.events"),
 ]
 
 
