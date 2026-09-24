@@ -41,7 +41,7 @@ mcp = MCPServer("dql-kb")
 def _llm_configured() -> bool:
     """Whether dql_generate can call a model outside the IDE.
 
-    The normal bank setup leaves this false: the IDE model calls dql_search
+    The normal enterprise setup leaves this false: the IDE model calls dql_search
     and writes the DQL itself. Outside the IDE, generation is either Bedrock
     Converse or a private OpenAI-compatible server (Ollama, vLLM, or another).
     """

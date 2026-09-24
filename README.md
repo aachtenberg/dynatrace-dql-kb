@@ -19,7 +19,7 @@ flowchart TD
 
 ## Start here
 
-Built for a desktop you do not administer: a bank or an insurer, where `pip install` and Docker Hub are blocked. The tools that talk to Dynatrace use the Python standard library. They do not need a virtualenv.
+Built for an enterprise desktop you do not administer, where `pip install` and Docker Hub are blocked. The tools that talk to Dynatrace use the Python standard library. They do not need a virtualenv.
 
 ```bash
 git clone https://github.com/aachtenberg/dynatrace-dql-kb.git

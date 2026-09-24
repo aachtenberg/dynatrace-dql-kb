@@ -32,7 +32,7 @@ class Config:
     """Central configuration - edit these values for your environment."""
 
     # LLM Provider. Leave unset so the IDE model writes the query from dql_search.
-    # Outside the IDE, a bank will have one of:
+    # Outside the IDE, an enterprise will have one of:
     #   bedrock              Amazon Bedrock Converse API
     #   ollama               private Ollama (native /api/chat; /v1 ignores num_ctx)
     #   vllm                 private vLLM (same API, default port 8000)
@@ -68,7 +68,7 @@ class Config:
 
     # Amazon Bedrock Converse API. Credentials come from the standard AWS chain
     # (SSO, IAM role, or env vars), not from a key stored in this repo.
-    # BEDROCK_MODEL_ID is the foundation-model id or, more often in a bank, the
+    # BEDROCK_MODEL_ID is the foundation-model id or, more often in an enterprise, the
     # cross-region inference profile id the platform team enabled.
     BEDROCK_REGION = (
         os.getenv("BEDROCK_REGION")
