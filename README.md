@@ -20,6 +20,7 @@ It is built for an enterprise desktop you do not administer, where `pip install`
 | Path | Who writes the DQL | Install |
 |------|--------------------|---------|
 | [Copilot agents](#github-copilot-agents) | The model in the IDE | None |
+| [`util/dql_agent.sh`](#ask-your-tenant-through-bedrock) | A Bedrock model, which also runs the query on your tenant and answers from the records | None; needs an AWS account with Bedrock |
 | [`dql_search`](#mcp-server) | Your MCP client's model, using the snippets | Docker, or `./quickstart.sh --with-rag` |
 | [`dql_generate` and `dql_rag.py query`](#generating-queries-outside-the-ide) | The model you configure | Same, plus Bedrock, Ollama, or another private server |
 
@@ -39,6 +40,42 @@ cp .env.example .env            # set DT_ENVIRONMENT_URL and DT_API_TOKEN
 Then open the folder in VS Code. The Copilot agents need nothing else.
 
 On Windows Git Bash, `python3` is often the Microsoft Store alias; the scripts skip it and use `python` or `py -3`.
+
+## Ask your tenant through Bedrock
+
+`./util/dql_agent.sh` puts a model on Amazon Bedrock in a loop with three tools: search the docs, look up the tenant's real metric keys and field names, and run DQL on your tenant. When Grail rejects a query, the model reads the error and fixes it. When the query runs, it answers from the records, not from memory. It uses only the Python standard library — requests to Bedrock are signed without `boto3` — so it runs on a locked-down desktop or in AWS CloudShell.
+
+```bash
+# in .env, next to DT_ENVIRONMENT_URL and DT_API_TOKEN
+BEDROCK_REGION=us-east-1
+# BEDROCK_MODEL_ID=...   optional; unset uses the Claude Sonnet 5 inference profile for the region
+```
+
+```bash
+./util/dql_agent.sh --models       # model ids this account can use in the region
+./util/dql_agent.sh --check        # AWS credentials, model access, tenant — says which one fails
+./util/dql_agent.sh                # interactive; /help lists the commands
+./util/dql_agent.sh "which hosts had CPU above 90% in the last hour?"
+```
+
+```
+dql> which hosts had CPU above 90% in the last hour?
+  · search_docs: timeseries cpu usage by host
+  · find_names: host cpu
+  · run_dql:
+      timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
+      | filter usage > 90
+  Run it? [Y/n, or say what to change]
+    2 records, 117.7 MB scanned
+```
+
+- **Grounded in the repo's DQL skill:** every call carries `.github/agents/dql-expert.md` (the rules Copilot's `@dql-expert` uses), and each query is checked locally for the classic mistakes (`where`, `fetch` on a metric, `by:` without braces, a missing comma after `fetch <source>`) before Grail sees it.
+- **You approve every query** before it runs, unless you pass `--yes` or type `/auto`. `--no-run` only writes queries. Without `DT_ENVIRONMENT_URL` it writes queries and does not run them.
+- **Cost guard:** each query is capped at 50 GB scanned (`DQL_AGENT_SCAN_LIMIT_GB`), and the scanned size is shown after it runs.
+- **AWS credentials** are read from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`, then `~/.aws/credentials` (`AWS_PROFILE`), then `aws configure export-credentials` if the AWS CLI is installed (SSO and assumed roles). A Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` also works. The identity needs `bedrock:InvokeModel` on the model.
+- **What leaves the machine:** your question, doc excerpts, and up to 50 records per query go to Bedrock in your AWS account. Nothing goes to a public model API.
+- Setup for the AWS team, recipes and troubleshooting: [util/dql_agent.md](util/dql_agent.md).
+- Run `./dt_fetch.sh all` first. The agent checks names against `docs/metric_keys.md` and `docs/entity_schemas.md`, so it is only as good as those two files.
 
 ## GitHub Copilot agents
 
@@ -79,6 +116,7 @@ In Agent Mode, Copilot can also search `docs/`.
 | `kubernetes.md` | Container CPU, restarts, and how to tell a cluster is k3s |
 | `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
 | `dql_wrong_vs_right.md` | Wrong→right pairs for the mistakes models make |
+| `dql_common_questions.md` | Plain questions (open problems, high CPU, errors, Kubernetes) mapped to a query that runs |
 | `dashboard_json_schema.md` | Dashboard JSON, tile types, visualizations, Terraform |
 | `metric_keys.md` | **Your tenant's** metric keys |
 | `entity_schemas.md` | **Your tenant's** entity, log and span fields |
@@ -187,5 +225,5 @@ PRIVATE_MODEL=your-model-name
 
 ## Also in this repo
 
-- **Trace profiler** — `./util/dt_trace_profiler.sh` ranks trace entry points and flags the ones that look like batch jobs. Standard library only. See [util/README.md](util/README.md).
+- **Trace profiler** — `./util/dt_trace_profiler.sh` ranks trace entry points and flags the ones that look like batch jobs. Standard library only. See [util/dt_trace_profiler.md](util/dt_trace_profiler.md).
 - **Evaluations** — [evaluations/](evaluations/) holds model test results. It stays out of `docs/` so they are not ingested as DQL reference.

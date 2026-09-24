@@ -178,6 +178,8 @@ Valid data objects for fetch:
 - `events` — event records
 - `bizevents` — business event records
 - `spans` — distributed trace spans
+- `dt.davis.problems` — Davis problems (what people call issues, incidents or alerts). Open ones have `event.status == "ACTIVE"`
+- `dt.davis.events` — Davis events, the individual detections that problems are built from
 - `dt.entity.host` — host entities
 - `dt.entity.service` — service entities
 - `dt.entity.process_group` — process group entities
@@ -198,6 +200,7 @@ fetch logs, bucket:"default_logs"
 fetch events
 fetch bizevents
 fetch spans
+fetch dt.davis.problems, from:-7d
 fetch dt.entity.host
 fetch dt.entity.service
 fetch dt.system.data_objects | filter type == "table"
