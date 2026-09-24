@@ -320,7 +320,7 @@ fetch dt.entity.host
 RIGHT (entities don't have metric values — query metrics separately):
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 ```
 
 Entity tables (dt.entity.host, dt.entity.service) contain metadata (name, tags, properties).

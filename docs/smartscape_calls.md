@@ -45,6 +45,4 @@ Services it calls: the same query with `source_id` filtered instead of `target_i
 
 `lookup` keeps one match per span. Several callers need `join` or `joinNested` onto `smartscapeEdges calls`: match `service_id` to `target_id` for callers and to `source_id` for callees.
 
-No `SERVICE` nodes on this tenant, so the SERVICE queries above return no rows. The same statements against `PROCESS` returned callers through `target_id`, one callee through `source_id`, and both `traverse` directions. `getNodeName()` filled in the process name.
-
-On tenants moving off the classic entity model, `fetch dt.entity.service` can return nothing, and its `calls` / `called_by` records (listed in `entity_schemas.md`) are then not the path that returns data. That fetch returned no rows here and was flagged `CLASSIC_ENTITY_MIGRATION_ADVISED`. Use the Smartscape edges above.
+On tenants moving off the classic entity model, `fetch dt.entity.service` can return nothing, and its `calls` / `called_by` records (listed in `entity_schemas.md`) are then not the path that returns data. Use the Smartscape edges above.

@@ -22,8 +22,8 @@ DQL queries are pipe-based. A starting command feeds into pipe commands:
 - `data record(...)` — inline test data
 - `load <resource>` — load lookup table data
 - `describe <source>` — show schema
-- `smartscapeNodes type:<type>` — load topology nodes
-- `smartscapeEdges type:<type>` — load topology edges
+- `smartscapeNodes <type>` — load topology nodes (`smartscapeNodes HOST`, `smartscapeNodes "*"`)
+- `smartscapeEdges <type>` — load topology edges (`smartscapeEdges calls`, `smartscapeEdges "*"`)
 
 ## Pipe Commands
 - `filter <condition>` — keep matching records
@@ -73,7 +73,7 @@ Examples:
 timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
 | filter usage > 90
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
 
