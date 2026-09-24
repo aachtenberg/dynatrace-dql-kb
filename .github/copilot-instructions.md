@@ -17,7 +17,7 @@ When generating DQL queries, follow these rules exactly. DQL is NOT SQL.
 | Chart logs/events over time | `makeTimeseries` (after fetch) | `fetch logs \| makeTimeseries count(), interval:5m` |
 | Lookup tables | `load` | `lookup [load dt.lookup.my_table], sourceField:key, lookupField:id` |
 | Schema/structure | `describe` | `describe logs` |
-| Topology nodes | `smartscapeNodes` | `smartscapeNodes type:HOST` |
+| Topology nodes | `smartscapeNodes` | `smartscapeNodes HOST` |
 
 ## Critical Rules
 
@@ -90,7 +90,7 @@ Discover more: `metrics | filter contains(metric.key, "keyword")`
 **Enrich metrics with entity names:**
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
 ```

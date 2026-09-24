@@ -116,6 +116,7 @@ In Agent Mode, Copilot can also search `docs/`.
 | `dql_syntax_reference.md` | Commands, functions, operators, data types |
 | `dql_example_queries.md` | Working queries: hosts, logs, spans, Kubernetes, entities |
 | `kubernetes.md` | Container CPU, restarts, and how to tell a cluster is k3s |
+| `smartscape_calls.md` | Span service ids to Smartscape `calls` / `called_by` via `id_classic` |
 | `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
 | `dql_wrong_vs_right.md` | Wrong→right pairs for the mistakes models make |
 | `dql_common_questions.md` | Plain questions (open problems, high CPU, errors, Kubernetes) mapped to a query that runs |

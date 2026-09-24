@@ -242,7 +242,7 @@ fetch dt.system.data_objects
 ### Enrich metrics with entity names via lookup
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
 ```
@@ -338,7 +338,7 @@ timeseries cpu=avg(dt.host.cpu.usage), by:{dt.entity.host}
 ```
 timeseries cpu=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
 | filter cpu > 80
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, cpu
 | sort cpu desc
 ```
@@ -397,7 +397,7 @@ fetch logs
 | filter timestamp >= now() - 1h
 | filter status == "ERROR"
 | summarize error_count = count(), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name, tags}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name, tags}
 | fields entity.name, error_count, tags
 | sort error_count desc
 ```
@@ -434,7 +434,7 @@ fetch logs
 ### Using fieldsRename to clean up output
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fieldsRename hostname = entity.name, cpu_percent = usage
 | fields hostname, cpu_percent
 | sort cpu_percent desc

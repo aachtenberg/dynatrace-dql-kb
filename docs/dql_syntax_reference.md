@@ -479,21 +479,20 @@ fetch dt.entity.host
 ### lookup
 Adds fields from a subquery by matching a source field to a lookup field.
 Only returns the first match.
-Looked-up fields are named `lookup.<field>` unless you pass `prefix` —
-use `prefix:""` to keep the original names (e.g. `entity.name`).
+With `fields:{…}`, the listed fields keep their names. `prefix` cannot be combined with `fields`.
+Without `fields`, looked-up fields are named `lookup.<field>` unless you pass `prefix`.
 
 Full syntax:
 ```
 lookup [subquery], sourceField:field, lookupField:field
-    [, prefix:"prefix_"]
-    [, fields:{field1, field2}]
+    [, prefix:"…" | fields:{…}]
     [, executionOrder:auto|leftFirst|rightFirst]
 ```
 
 ```
 // Enrich metrics with entity names
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, fields:{entity.name}
 | fields entity.name, usage
 
 // Lookup from a lookup table
@@ -516,21 +515,26 @@ fetch dt.entity.process_group
 ## Smartscape Commands
 
 ### smartscapeNodes
-Loads Smartscape topology nodes.
+Loads Smartscape topology nodes. The argument is the node type.
 ```
-smartscapeNodes type:HOST
-smartscapeNodes type:SERVICE
-smartscapeNodes type:*
+smartscapeNodes HOST
+smartscapeNodes "*"
 ```
 
 ### smartscapeEdges
-Loads Smartscape topology edges.
+Loads Smartscape topology edges. The argument is the edge type.
 ```
-smartscapeEdges type:*
+smartscapeEdges calls
+smartscapeEdges "*"
 ```
 
 ### traverse
-Traverses source nodes to target nodes in a specified direction.
+Follows edges from the nodes already in the pipeline. Put the edge type and the target type in curly braces.
+```
+smartscapeNodes PROCESS
+| traverse {calls}, {PROCESS}, direction:forward
+```
+`direction:backward` walks the same edge the other way.
 
 ---
 
