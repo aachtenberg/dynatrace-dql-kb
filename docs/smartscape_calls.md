@@ -1,6 +1,6 @@
 # Spans to Smartscape calls
 
-How to get from a span's service id to the Smartscape `calls` edges, i.e. which services call it and which it calls. Syntax follows the Dynatrace docs for [Smartscape commands](https://docs.dynatrace.com/docs/platform/grail/dynatrace-query-language/commands/smartscape-commands). What was run against a tenant is marked below; the rest is from those docs.
+How to get from a span's service id to the Smartscape `calls` edges, i.e. which services call it and which it calls. Syntax follows the Dynatrace docs for [Smartscape commands](https://docs.dynatrace.com/docs/platform/grail/dynatrace-query-language/commands/smartscape-commands). Verified with `PROCESS` nodes.
 
 ## Which id the span has
 
@@ -26,7 +26,7 @@ fetch spans, from:now()-1h
   fields:{service_id}
 ```
 
-`fields:{id}` adds a column named `id`. `lookup.id` is not a field, and `prefix` cannot be combined with `fields`. The span query above parses and returns no rows here, because this tenant has no spans in the last hour. The same `lookup` against a `PROCESS` node, fed the classic `PROCESS_GROUP_INSTANCE-…` id, returned the `PROCESS-…` id.
+`fields:{id}` adds a column named `id`. `lookup.id` is not a field, and `prefix` cannot be combined with `fields`. The same `lookup` against a `PROCESS` node, fed the classic `PROCESS_GROUP_INSTANCE-…` id, returned the `PROCESS-…` id.
 
 ## calls and called_by
 

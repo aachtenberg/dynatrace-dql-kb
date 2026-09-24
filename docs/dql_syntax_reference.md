@@ -485,8 +485,7 @@ Without `fields`, looked-up fields are named `lookup.<field>` unless you pass `p
 Full syntax:
 ```
 lookup [subquery], sourceField:field, lookupField:field
-    [, prefix:"prefix_"]
-    [, fields:{field1, field2}]
+    [, prefix:"…" | fields:{…}]
     [, executionOrder:auto|leftFirst|rightFirst]
 ```
 
