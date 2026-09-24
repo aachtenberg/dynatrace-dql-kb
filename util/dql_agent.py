@@ -10,13 +10,15 @@ Usage:
     ./util/dql_agent.sh                 # interactive
     ./util/dql_agent.sh "hosts with CPU above 90% in the last hour"
     ./util/dql_agent.sh --check         # test credentials, model access and tenant
+    ./util/dql_agent.sh --models claude # list model ids you can put in BEDROCK_MODEL_ID
     ./util/dql_agent.sh --help
 
 Setup, recipes and troubleshooting: util/dql_agent.md
 
 Configuration (environment variables, or .env in the repo root):
-    BEDROCK_MODEL_ID      required; the model or inference-profile id enabled
-                          in your account, e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    BEDROCK_MODEL_ID      optional; the model or inference-profile id to use.
+                          Unset: the Claude Sonnet 5 inference profile for
+                          BEDROCK_REGION, looked up with ListInferenceProfiles
     BEDROCK_REGION        default AWS_REGION, then AWS_DEFAULT_REGION, then us-east-1
     AWS credentials       see _aws_credentials() for the order they are looked up
     DT_ENVIRONMENT_URL    as for dt_fetch.py; without it the agent writes DQL
@@ -54,6 +56,9 @@ DOCS_DIR = REPO_ROOT / "docs"
 DOC_SUFFIXES = {".md", ".txt", ".dql", ".json", ".yaml", ".yml"}
 
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
+# Used when BEDROCK_MODEL_ID is unset: the first active inference profile whose
+# id contains this, preferring the one for the region's geography.
+DEFAULT_MODEL_MATCH = "claude-sonnet-5"
 BEDROCK_REGION = (
     os.getenv("BEDROCK_REGION")
     or os.getenv("AWS_REGION")
@@ -182,17 +187,17 @@ class BedrockError(RuntimeError):
 
 
 class Bedrock:
-    def __init__(self, model_id: str, region: str):
-        if not model_id:
-            raise BedrockError(
-                "BEDROCK_MODEL_ID is not set. Use the model or inference-profile "
-                "id enabled in your account, e.g. "
-                "us.anthropic.claude-sonnet-4-5-20250929-v1:0."
-            )
+    """Bedrock Runtime (Converse) and the two read-only calls on the Bedrock
+    control plane that list models and inference profiles."""
+
+    def __init__(self, model_id: str, region: str, need_model: bool = True):
         self.model_id = model_id
         self.region = region
         self.endpoint = os.getenv(
             "BEDROCK_ENDPOINT_URL", f"https://bedrock-runtime.{region}.amazonaws.com"
+        ).rstrip("/")
+        self.control_endpoint = os.getenv(
+            "BEDROCK_CONTROL_ENDPOINT_URL", f"https://bedrock.{region}.amazonaws.com"
         ).rstrip("/")
         # A Bedrock API key, if the account issues them, replaces SigV4.
         self.api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
@@ -204,30 +209,26 @@ class Bedrock:
                 "~/.aws/credentials, sign in with `aws sso login` if the AWS "
                 "CLI is installed, or set AWS_BEARER_TOKEN_BEDROCK."
             )
+        if need_model and not self.model_id:
+            self.model_id = self._default_model()
 
     @property
     def auth_source(self) -> str:
         return "AWS_BEARER_TOKEN_BEDROCK" if self.api_key else self.creds.source
 
-    def converse(self, messages, system=None, tools=None, max_tokens=4096):
-        body = {
-            "messages": messages,
-            "inferenceConfig": {"maxTokens": max_tokens, "temperature": 0},
-        }
-        if system:
-            body["system"] = [{"text": system}]
-        if tools:
-            body["toolConfig"] = {"tools": tools}
-        data = json.dumps(body).encode("utf-8")
-        url = (f"{self.endpoint}/model/"
-               f"{urllib.parse.quote(self.model_id, safe='')}/converse")
-        headers = {"content-type": "application/json", "accept": "application/json"}
+    def _request(self, method: str, url: str, body: dict | None = None,
+                 action: str = "bedrock:InvokeModel") -> dict:
+        data = json.dumps(body).encode("utf-8") if body is not None else b""
+        headers = {"accept": "application/json"}
+        if body is not None:
+            headers["content-type"] = "application/json"
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         else:
-            headers.update(sigv4_headers("POST", url, data, self.creds,
+            headers.update(sigv4_headers(method, url, data, self.creds,
                                          self.region, "bedrock"))
-        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        req = urllib.request.Request(url, data=data if body is not None else None,
+                                     method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -238,19 +239,85 @@ class Bedrock:
             except ValueError:
                 pass
             raise BedrockError(f"Bedrock HTTP {e.code}: {detail}\n"
-                               f"{_bedrock_hint(e.code, detail)}") from None
+                               f"{_bedrock_hint(e.code, detail, action)}") from None
         except urllib.error.URLError as e:
+            host = urllib.parse.urlsplit(url).netloc
             raise BedrockError(
-                f"Cannot reach {self.endpoint}: {e.reason}. Behind a proxy, set "
+                f"Cannot reach {host}: {e.reason}. Behind a proxy, set "
                 "HTTPS_PROXY. If TLS inspection breaks certificate checks, set "
                 "SSL_CERT_FILE to your company CA bundle."
             ) from None
 
+    def _default_model(self) -> str:
+        """The DEFAULT_MODEL_MATCH inference profile for this region's
+        geography (us-east-1 -> us., eu-west-1 -> eu.), else a global. one,
+        else any match."""
+        try:
+            profiles = self.list_inference_profiles()
+        except BedrockError as e:
+            raise BedrockError(
+                "BEDROCK_MODEL_ID is not set, and the default model could not be "
+                "looked up. Set BEDROCK_MODEL_ID to the model or inference-profile "
+                f"id your AWS team enabled.\n{e}") from None
+        ids = sorted(p.get("inferenceProfileId", "") for p in profiles
+                     if DEFAULT_MODEL_MATCH in p.get("inferenceProfileId", "")
+                     and p.get("status", "ACTIVE") == "ACTIVE")
+        geo = {"us": "us.", "eu": "eu.", "ap": "apac.", "ca": "ca.",
+               "sa": "sa.", "me": "me."}.get(self.region.split("-")[0], "")
+        for prefix in (geo, "global.", ""):
+            picks = [i for i in ids if prefix and i.startswith(prefix)] if prefix else ids
+            if picks:
+                return picks[0]
+        raise BedrockError(
+            f"BEDROCK_MODEL_ID is not set and no {DEFAULT_MODEL_MATCH} inference "
+            f"profile is offered in {self.region}. Run ./util/dql_agent.sh --models "
+            "and set BEDROCK_MODEL_ID to one of the ids.")
 
-def _bedrock_hint(code: int, detail: str) -> str:
+    def converse(self, messages, system=None, tools=None, max_tokens=4096):
+        if not self.model_id:
+            raise BedrockError("BEDROCK_MODEL_ID is not set.")
+        body = {
+            "messages": messages,
+            "inferenceConfig": {"maxTokens": max_tokens},
+        }
+        if system:
+            body["system"] = [{"text": system}]
+        if tools:
+            body["toolConfig"] = {"tools": tools}
+        url = (f"{self.endpoint}/model/"
+               f"{urllib.parse.quote(self.model_id, safe='')}/converse")
+        return self._request("POST", url, body)
+
+    def list_foundation_models(self) -> list[dict]:
+        """ListFoundationModels, text-output models only."""
+        url = f"{self.control_endpoint}/foundation-models?byOutputModality=TEXT"
+        return self._request("GET", url, action="bedrock:ListFoundationModels"
+                             ).get("modelSummaries", []) or []
+
+    def list_inference_profiles(self) -> list[dict]:
+        """ListInferenceProfiles, system-defined (cross-region) profiles."""
+        out, token = [], None
+        while True:
+            query = {"maxResults": "1000", "typeEquals": "SYSTEM_DEFINED"}
+            if token:
+                query["nextToken"] = token
+            url = (f"{self.control_endpoint}/inference-profiles?"
+                   + urllib.parse.urlencode(query, quote_via=urllib.parse.quote))
+            resp = self._request("GET", url, action="bedrock:ListInferenceProfiles")
+            out.extend(resp.get("inferenceProfileSummaries", []) or [])
+            token = resp.get("nextToken")
+            if not token:
+                return out
+
+
+def _bedrock_hint(code: int, detail: str,
+                  action: str = "bedrock:InvokeModel") -> str:
     low = detail.lower()
     if code == 403 and "security token" in low:
         return "The credentials are expired or wrong. Refresh them and try again."
+    if code == 403 and action != "bedrock:InvokeModel":
+        return (f"The identity is not allowed {action}. Ask your AWS team for the "
+                "model id instead; listing is optional.")
     if code == 403:
         return ("The identity needs bedrock:InvokeModel on this model (and on the "
                 "inference profile, if the id starts with us. or eu.).")
@@ -676,6 +743,70 @@ def _tenant_configured() -> bool:
     return bool(dt_fetch.DT_ENVIRONMENT_URL and dt_fetch.DT_API_TOKEN)
 
 
+def list_models(match: str = "") -> int:
+    """Print the inference profiles and text models Bedrock offers in this
+    region. Listed does not mean enabled for this account: --check proves that."""
+    try:
+        bedrock = Bedrock(BEDROCK_MODEL_ID, BEDROCK_REGION, need_model=False)
+    except BedrockError as e:
+        _say(f"ERROR: {e}")
+        return 2
+    match = match.lower()
+    print(f"Bedrock in {BEDROCK_REGION}, credentials from {bedrock.auth_source}")
+    print("* = BEDROCK_MODEL_ID. Pick an id from the first column. With "
+          f"BEDROCK_MODEL_ID unset, the {DEFAULT_MODEL_MATCH} profile for the "
+          "region is used.\n")
+    ok = False
+
+    try:
+        profiles = bedrock.list_inference_profiles()
+        ok = True
+        rows = sorted(
+            (p.get("inferenceProfileId", ""), p.get("inferenceProfileName", ""),
+             p.get("status", ""))
+            for p in profiles)
+        rows = [r for r in rows if match in (r[0] + " " + r[1]).lower()]
+        print(f"Inference profiles ({len(rows)}), the usual choice:")
+        width = max((len(r[0]) for r in rows), default=0)
+        for pid, name, status in rows:
+            mark = "*" if pid == BEDROCK_MODEL_ID else " "
+            extra = "" if status in ("", "ACTIVE") else f"  [{status}]"
+            print(f" {mark} {pid:<{width}}  {name}{extra}")
+    except BedrockError as e:
+        print(f"Inference profiles: could not list.\n{e}")
+
+    print()
+    try:
+        models = bedrock.list_foundation_models()
+        ok = True
+        rows = []
+        for m in models:
+            mid = m.get("modelId", "")
+            label = f"{m.get('providerName', '')} {m.get('modelName', '')}".strip()
+            if match not in (mid + " " + label).lower():
+                continue
+            types = m.get("inferenceTypesSupported") or []
+            how = ("on-demand" if "ON_DEMAND" in types
+                   else "profile only" if "INFERENCE_PROFILE" in types
+                   else "provisioned only")
+            life = (m.get("modelLifecycle") or {}).get("status", "")
+            rows.append((mid, how, label + ("" if life in ("", "ACTIVE") else f"  [{life}]")))
+        rows.sort()
+        print(f"Foundation models with text output ({len(rows)}):")
+        width = max((len(r[0]) for r in rows), default=0)
+        for mid, how, label in rows:
+            mark = "*" if mid == BEDROCK_MODEL_ID else " "
+            print(f" {mark} {mid:<{width}}  {how:<16}  {label}")
+        print("\n'profile only' models are called through the matching us./eu./apac. "
+              "profile above.")
+    except BedrockError as e:
+        print(f"Foundation models: could not list.\n{e}")
+
+    print("\nThe model must support tool use in Converse. Confirm one works with:\n"
+          "  BEDROCK_MODEL_ID=<id> ./util/dql_agent.sh --check")
+    return 0 if ok else 1
+
+
 def check() -> int:
     ok = True
     index = DocIndex()
@@ -688,7 +819,8 @@ def check() -> int:
     try:
         bedrock = Bedrock(BEDROCK_MODEL_ID, BEDROCK_REGION)
         print(f"aws:     {bedrock.auth_source}")
-        print(f"model:   {BEDROCK_MODEL_ID} in {BEDROCK_REGION}")
+        how = "BEDROCK_MODEL_ID" if BEDROCK_MODEL_ID else "default, looked up"
+        print(f"model:   {bedrock.model_id} in {BEDROCK_REGION} ({how})")
         resp = bedrock.converse(
             [{"role": "user", "content": [{"text": "Reply with the word OK."}]}],
             max_tokens=10)
@@ -720,6 +852,9 @@ def main() -> int:
     ap.add_argument("question", nargs="*", help="ask once and exit")
     ap.add_argument("--check", action="store_true",
                     help="test AWS credentials, model access and the tenant")
+    ap.add_argument("--models", nargs="?", const="", metavar="FILTER",
+                    help="list the Bedrock models and inference profiles in this "
+                         "region, optionally only those matching FILTER")
     ap.add_argument("--yes", "-y", action="store_true",
                     help="run queries without asking")
     ap.add_argument("--no-run", action="store_true",
@@ -728,6 +863,8 @@ def main() -> int:
 
     if args.check:
         return check()
+    if args.models is not None:
+        return list_models(args.models)
 
     try:
         bedrock = Bedrock(BEDROCK_MODEL_ID, BEDROCK_REGION)
@@ -749,7 +886,7 @@ def main() -> int:
             return 1
         return 0
 
-    _say(f"DQL agent · {BEDROCK_MODEL_ID} · "
+    _say(f"DQL agent · {bedrock.model_id} · "
          + (f"tenant {dt_fetch.DT_ENVIRONMENT_URL}" if can_run
             else "no tenant: queries are written, not run"))
     _say("Ask a question, or /help.")

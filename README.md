@@ -47,11 +47,12 @@ On Windows Git Bash, `python3` is often the Microsoft Store alias; the scripts s
 
 ```bash
 # in .env, next to DT_ENVIRONMENT_URL and DT_API_TOKEN
-BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 BEDROCK_REGION=us-east-1
+# BEDROCK_MODEL_ID=...   optional; unset uses the Claude Sonnet 5 inference profile for the region
 ```
 
 ```bash
+./util/dql_agent.sh --models       # model ids this account can use in the region
 ./util/dql_agent.sh --check        # AWS credentials, model access, tenant — says which one fails
 ./util/dql_agent.sh                # interactive; /help lists the commands
 ./util/dql_agent.sh "which hosts had CPU above 90% in the last hour?"

@@ -32,23 +32,30 @@ The agent can only read what the token can read. If you leave out `storage:logs:
 
 ### 2.2 AWS access (for the AWS or platform team)
 
-The identity needs `bedrock:InvokeModel`; Converse is authorised by that action. For a cross-region inference profile (an id starting with `us.` or `eu.`), grant it on the profile **and** on the foundation model in every region the profile routes to:
+The default model is **Claude Sonnet 5**, called through its cross-region inference profile (an id starting with `us.`, `eu.`, `apac.` or `global.`). The identity needs `bedrock:InvokeModel` (Converse is authorised by that action) on the profile **and** on the foundation model in every region the profile routes to. The two list actions let the agent find the profile id itself and power `--models`; without them, set `BEDROCK_MODEL_ID` by hand.
 
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": "bedrock:InvokeModel",
-    "Resource": [
-      "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-5-*",
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-*"
-    ]
-  }]
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-sonnet-5*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["bedrock:ListInferenceProfiles", "bedrock:ListFoundationModels"],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
-Change the model pattern to match whatever the account has enabled. If the account still uses Bedrock's **Model access** page, the model must also be enabled there. Anthropic models ask for a one-off use-case form.
+Change the model pattern if you use another model. If the account still uses Bedrock's **Model access** page, the model must also be enabled there. Anthropic models ask for a one-off use-case form.
 
 ### 2.3 `.env`
 
@@ -61,13 +68,20 @@ Set these in `.env`:
 ```bash
 DT_ENVIRONMENT_URL=https://<env-id>.apps.dynatrace.com
 DT_API_TOKEN=dt0s16.XXXXXXXX
-BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 BEDROCK_REGION=us-east-1
+# BEDROCK_MODEL_ID=     # optional; see below
 # HTTPS_PROXY=http://proxy.company.com:8080
 # SSL_CERT_FILE=/path/to/company-ca.pem
 ```
 
-The `us.`/`eu.` prefix of the model id has to match the region's geography.
+With `BEDROCK_MODEL_ID` unset, the agent asks Bedrock for the Claude Sonnet 5 inference profile that matches the region's geography (`us.` for `us-east-1`, `eu.` for `eu-west-1`), falling back to `global.`. To choose the model yourself:
+
+```bash
+./util/dql_agent.sh --models           # every inference profile and text model in the region
+./util/dql_agent.sh --models sonnet    # only ids or names containing "sonnet"
+```
+
+Put an id from the first column in `BEDROCK_MODEL_ID`. "profile only" models are called through their `us.`/`eu.`/… profile, not the bare id. A model can be listed and still not be enabled for your account; `--check` is the proof.
 
 ### 2.4 AWS credentials
 
@@ -101,7 +115,7 @@ A healthy run looks like this. The exit code is 0.
 ```
 docs:    231 sections, 903 metric keys and fields, from .../docs
 aws:     environment variables
-model:   us.anthropic.claude-sonnet-4-5-20250929-v1:0 in us-east-1
+model:   us.anthropic.claude-sonnet-5-… in us-east-1 (default, looked up)
          Converse answered: 'OK'
 tenant:  https://<env-id>.apps.dynatrace.com
          query ran, 1 record(s)
@@ -134,6 +148,7 @@ Flags:
 | `--yes`, `-y` | Run queries without asking |
 | `--no-run` | Write queries only; never touch the tenant |
 | `--check` | Section 3 |
+| `--models [FILTER]` | List the model ids you can use in the region (section 2.3) |
 
 Environment:
 
@@ -229,10 +244,11 @@ CloudShell has to reach your tenant. A CloudShell that runs inside a VPC may not
 ### Use a different model
 
 ```bash
-BEDROCK_MODEL_ID=<another enabled id> ./util/dql_agent.sh --check
+./util/dql_agent.sh --models nova                  # find the id
+BEDROCK_MODEL_ID=<id from the list> ./util/dql_agent.sh --check
 ```
 
-The model must support tool use in Converse.
+Any model that supports tool use in Converse works. Sonnet 5 is the default because this is a multi-step job in a niche language: search, check names, run, read Grail's error, fix. Stronger models get there in fewer rounds. A cheaper model such as Amazon Nova is worth trying when cost matters or when it is the model your AWS team has already approved; give it the same questions you asked Sonnet and compare the queries it ends up running (`/last`).
 
 ### Call it from your own app (Flask, a bot, a notebook)
 
@@ -254,6 +270,8 @@ Create one `Agent` per user conversation. `approve="ask"` reads from the termina
 | You see | Cause | Fix |
 |---------|-------|-----|
 | `Python 3.10 or newer was not found` | Old Python, or only the Microsoft Store alias | Use the company Python; in Git Bash check `python --version` |
+| `BEDROCK_MODEL_ID is not set, and the default model could not be looked up` | The identity may not call `ListInferenceProfiles` | Set `BEDROCK_MODEL_ID` to the id your AWS team gives you |
+| `no claude-sonnet-5 inference profile is offered in <region>` | Sonnet 5 is not in that region | `--models`, then set `BEDROCK_MODEL_ID`, or change `BEDROCK_REGION` |
 | `No AWS credentials found` | None of the sources in 2.4 | Set one; with SSO run `aws sso login` first |
 | `Bedrock HTTP 403 … security token` | Expired or wrong credentials | Paste fresh keys or sign in again |
 | `Bedrock HTTP 403 … not authorized … bedrock:InvokeModel` | IAM | Policy in 2.2, including the inference-profile ARN |
