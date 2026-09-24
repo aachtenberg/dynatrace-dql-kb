@@ -93,7 +93,9 @@ fetch dataObject [,bucket:name] [,from:timestamp] [,to:timestamp]
 - `dt.host.disk.usage`, `dt.host.disk.io.read`, `dt.host.disk.io.write`
 - `dt.host.network.io.receive`, `dt.host.network.io.transmit`
 - `dt.service.request.count`, `dt.service.request.response_time`, `dt.service.request.failure_count`
-- `dt.containers.cpu.usage`, `dt.containers.memory.usage`
+- `dt.kubernetes.container.cpu_usage`, `dt.kubernetes.container.memory_working_set`, `dt.kubernetes.container.restarts`, `dt.kubernetes.pods`
+- Kubernetes dimensions: `k8s.cluster.name`, `k8s.namespace.name`, `k8s.workload.name`, `k8s.pod.name`, `k8s.node.name`, `k8s.container.name`
+- k3s shows up in `kubernetesVersion` (`contains(kubernetesVersion, "+k3s")`). `kubernetesDistribution` stays `KUBERNETES`.
 
 Discover more: `metrics | filter contains(metric.key, "keyword")`
 
@@ -172,11 +174,16 @@ Case-insensitive text search (must follow fetch): `fetch logs | search "OutOfMem
 
 **Enrich metrics with entity names:**
 ```
-timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
+```
+
+**Kubernetes container CPU by namespace:**
+```
+timeseries cpu=avg(dt.kubernetes.container.cpu_usage, scalar:true), by:{k8s.namespace.name}, from:-1h
+| sort cpu desc
 ```
 
 **Multiple metrics (use append):**

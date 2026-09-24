@@ -2,8 +2,7 @@
 # Source: docs.dynatrace.com — verified against current documentation
 
 ## Overview
-DQL is used to query Dynatrace Grail data lakehouse. Queries follow a pipe-based
-syntax where data flows through a series of commands separated by the pipe `|` operator.
+DQL queries Dynatrace Grail. Commands are separated by `|`. Data flows left to right.
 
 ## CRITICAL: Metrics vs Logs/Events/Entities
 
@@ -184,7 +183,7 @@ Valid data objects for fetch:
 - `dt.entity.process_group` — process group entities
 - `dt.entity.process_group_instance` — process group instance entities
 - `dt.entity.cloud_application` — Kubernetes workloads
-- `dt.entity.cloud_application_namespace` — Kubernetes namespaces
+- `dt.entity.cloud_application_namespace` — namespace entities. For `dt.kubernetes.*` metrics, group by `k8s.namespace.name`, not this id.
 - `dt.entity.kubernetes_cluster` — Kubernetes clusters
 - Any `dt.entity.*` type
 - `dt.system.data_objects` — list available data objects
@@ -477,6 +476,8 @@ fetch dt.entity.host
 ### lookup
 Adds fields from a subquery by matching a source field to a lookup field.
 Only returns the first match.
+Looked-up fields are named `lookup.<field>` unless you pass `prefix` —
+use `prefix:""` to keep the original names (e.g. `entity.name`).
 
 Full syntax:
 ```
@@ -489,8 +490,7 @@ lookup [subquery], sourceField:field, lookupField:field
 ```
 // Enrich metrics with entity names
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fields entity.name, usage
 
 // Lookup from a lookup table
@@ -849,17 +849,19 @@ dt.service.request.response_time      // response time
 dt.service.request.failure_count      // failure count
 dt.service.request.failure_rate       // failure rate
 
-// Containers
-dt.containers.cpu.usage               // container CPU usage
-dt.containers.memory.usage            // container memory usage
-dt.containers.memory.resident_set_size // container RSS
+// Containers (cgroup counters; not the Kubernetes object metrics)
+dt.containers.cpu.usage_system_time
+dt.containers.cpu.usage_user_time
+dt.containers.memory.resident_set_bytes
 
-// Kubernetes
-dt.kubernetes.node.cpu_allocatable    // K8s node allocatable CPU
-dt.kubernetes.node.memory_allocatable // K8s node allocatable memory
-dt.kubernetes.container.cpu_usage     // K8s container CPU
-dt.kubernetes.container.memory_usage  // K8s container memory
-dt.kubernetes.workload.requests_total // K8s workload request count
+// Kubernetes (cloud-native full stack). dt.containers.cpu.usage is not this set.
+dt.kubernetes.container.cpu_usage
+dt.kubernetes.container.memory_working_set
+dt.kubernetes.container.restarts
+dt.kubernetes.pods
+dt.kubernetes.node.cpu_allocatable
+dt.kubernetes.node.memory_allocatable
+dt.kubernetes.node.pods_allocatable
 ```
 
 Discover more metrics: `metrics | filter contains(metric.key, "keyword")`

@@ -124,9 +124,9 @@ fetch spans, from: now() - {days}d{scan_group(scan_limit_gb)}
 | filter {root_filter}
 | fieldsAdd svc = {SVC}, svc_id = {SVC_ID}, ep = {EP}, kind = span.kind,
             dur_ms = toLong(duration) / 1000000.0
-| summarize runs = count(),
-            p50_ms = percentile(dur_ms, 50),
-            p95_ms = percentile(dur_ms, 95),
+| summarize {{runs = count(),
+             p50_ms = percentile(dur_ms, 50),
+             p95_ms = percentile(dur_ms, 95)}},
             by: {{svc, svc_id, ep, kind}}
 | sort runs desc
 """
@@ -218,7 +218,7 @@ def stage_shape(recent, p95_ms: float, scan_limit_gb: int):
         dql = f"""
 fetch spans{scan_group(scan_limit_gb)}
 | filter toString(trace.id) == {dql_str(tid)}
-| summarize spans = count(), db_spans = countIf(isNotNull(db.system))
+| summarize {{spans = count(), db_spans = countIf(isNotNull(db.system))}}
 """
         rows = query(
             dql,

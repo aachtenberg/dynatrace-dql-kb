@@ -242,39 +242,74 @@ fetch dt.system.data_objects
 ### Enrich metrics with entity names via lookup
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fields entity.name, usage
 | sort usage desc
 ```
 
 ---
 
-## Kubernetes / Cloud
+## Kubernetes
+
+Cloud-native full-stack monitoring. Checked 2026-09-24 on a k3s cluster. `dt.containers.cpu.usage` returned no rows. Use `dt.kubernetes.*`.
+
+k3s does not set `kubernetesDistribution` to k3s. That field stays `KUBERNETES`. The version string carries it (`v1.31.4+k3s1`).
+
+Dimensions that returned data on `dt.kubernetes.container.cpu_usage`: `k8s.cluster.name`, `k8s.namespace.name`, `k8s.workload.name`, `k8s.pod.name`, `k8s.node.name`, `k8s.container.name`, `dt.entity.kubernetes_cluster`.
+
+Group these metrics by `k8s.namespace.name`. `dt.entity.cloud_application_namespace` and `dt.entity.kubernetes_namespace` are entity ids and drop namespaces.
+
+### Clusters, including k3s
+```
+fetch dt.entity.kubernetes_cluster
+| fields id, entity.name, kubernetesVersion, kubernetesDistribution
+```
+
+```
+fetch dt.entity.kubernetes_cluster
+| filter contains(kubernetesVersion, "+k3s")
+| fields entity.name, kubernetesVersion
+```
 
 ### Container CPU by namespace
 ```
-timeseries avg(dt.containers.cpu.usage),
-    by:{k8s.namespace.name, k8s.pod.name}
+timeseries cpu=avg(dt.kubernetes.container.cpu_usage, scalar:true),
+    by:{k8s.namespace.name}, from:-1h
+| sort cpu desc
 ```
 
-### Pod restart events
+### Container CPU by workload
 ```
-fetch events
-| filter timestamp >= now() - 24h
-| filter event.type == "K8S_EVENT"
-| filter contains(content, "Restarted")
-| summarize restart_count = count(), by:{k8s.pod.name, k8s.namespace.name}
-| sort restart_count desc
+timeseries cpu=avg(dt.kubernetes.container.cpu_usage),
+    by:{k8s.namespace.name, k8s.workload.name}, from:-1h
 ```
 
-### Kubernetes node CPU with annotation context
+### Working set memory by namespace
 ```
-timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}
-| lookup [fetch dt.entity.host
-    | filter in(kubernetesLabels, "app.kubernetes.io/component")
-    | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+timeseries mem=avg(dt.kubernetes.container.memory_working_set, scalar:true),
+    by:{k8s.namespace.name}, from:-1h
+| sort mem desc
+```
+
+### Pods by namespace
+```
+timeseries pods=avg(dt.kubernetes.pods, scalar:true),
+    by:{k8s.namespace.name}, from:-1h
+| sort pods desc
+```
+
+### Pods a node can schedule
+```
+timeseries pods=avg(dt.kubernetes.node.pods_allocatable, scalar:true),
+    by:{k8s.node.name}, from:-1h
+```
+
+### Container restarts
+```
+timeseries restarts=sum(dt.kubernetes.container.restarts, scalar:true),
+    by:{k8s.namespace.name, k8s.pod.name}, from:-6h
+| filter restarts > 0
+| sort restarts desc
 ```
 
 ---
@@ -303,8 +338,7 @@ timeseries cpu=avg(dt.host.cpu.usage), by:{dt.entity.host}
 ```
 timeseries cpu=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
 | filter cpu > 80
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fields entity.name, cpu
 | sort cpu desc
 ```
@@ -363,8 +397,7 @@ fetch logs
 | filter timestamp >= now() - 1h
 | filter status == "ERROR"
 | summarize error_count = count(), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name, tags],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name, tags}
 | fields entity.name, error_count, tags
 | sort error_count desc
 ```
@@ -401,8 +434,7 @@ fetch logs
 ### Using fieldsRename to clean up output
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 | fieldsRename hostname = entity.name, cpu_percent = usage
 | fields hostname, cpu_percent
 | sort cpu_percent desc

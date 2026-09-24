@@ -30,17 +30,25 @@ When generating Dynatrace dashboard JSON, use the NEW Grail/Platform format (NOT
 
 ## Tile Types
 
-**Data tile (DQL query):**
+**Data tile — threshold table:**
 ```json
 {
   "type": "data",
-  "title": "CPU Usage",
-  "query": "timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}",
+  "title": "Hosts above 90% CPU",
+  "query": "timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h | filter usage > 90",
+  "visualization": "table",
+  "subType": "dql"
+}
+```
+
+**Data tile — line chart.** No `scalar:true`. Kubernetes container metrics use `k8s.namespace.name`, not the namespace entity id.
+```json
+{
+  "type": "data",
+  "title": "Container CPU by namespace",
+  "query": "timeseries avg(dt.kubernetes.container.cpu_usage), by:{k8s.namespace.name}, from:-1h",
   "visualization": "lineChart",
-  "subType": "dql",
-  "davis": { "enabled": false, "davisVisualization": { "isAvailable": true } },
-  "visualizationSettings": { "thresholds": [], "chartSettings": { "gapPolicy": "connect" } },
-  "queryConfig": { "version": "", "additionalFilters": {}, "selectArray": [] }
+  "subType": "dql"
 }
 ```
 
@@ -59,8 +67,14 @@ When generating Dynatrace dashboard JSON, use the NEW Grail/Platform format (NOT
 `"map"`, `"graph"`, `"davisAnalysis"`
 
 ## DQL in Queries
-All `query` fields use DQL syntax. Follow the DQL rules from copilot-instructions.md.
-Metrics use `timeseries`, logs use `fetch logs`, etc.
+The `query` string is DQL, and it has to carry every constraint from the request.
+
+- Metrics use `timeseries`, never `fetch`.
+- `by:{...}` always has curly braces.
+- A time window goes on the `timeseries` command: `from:-1h`.
+- A threshold is a `filter` on a named scalar: `scalar:true`, then `| filter usage > 90`.
+- `fetch logs` for logs. Quote string values.
+- Kubernetes container metrics: `by:{k8s.namespace.name}`. Not an entity id.
 
 ## Classic vs New — DO NOT MIX
 If you see `tileType`, `bounds`, `filterConfig`, or metric selectors like

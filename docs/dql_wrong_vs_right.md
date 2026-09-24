@@ -235,8 +235,8 @@ Common REAL metric keys:
 - dt.service.request.count
 - dt.service.request.response_time
 - dt.service.request.failure_count
-- dt.containers.cpu.usage
-- dt.containers.memory.usage
+- dt.kubernetes.container.cpu_usage
+- dt.kubernetes.container.memory_working_set
 
 To discover metrics in your environment:
 ```
@@ -320,8 +320,7 @@ fetch dt.entity.host
 RIGHT (entities don't have metric values — query metrics separately):
 ```
 timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
-| lookup [fetch dt.entity.host | fields id, entity.name],
-    sourceField:dt.entity.host, lookupField:id
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
 ```
 
 Entity tables (dt.entity.host, dt.entity.service) contain metadata (name, tags, properties).

@@ -71,7 +71,12 @@ timeseries [name=]aggregation(metricKey [,scalar:true] [,default:val] [,rate:1s]
 Examples:
 ```
 timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}
-timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}
+timeseries usage=avg(dt.host.cpu.usage, scalar:true), by:{dt.entity.host}, from:-1h
+| filter usage > 90
+| lookup [fetch dt.entity.host], sourceField:dt.entity.host, lookupField:id, prefix:"", fields:{entity.name}
+| fields entity.name, usage
+| sort usage desc
+
 timeseries avg(dt.host.cpu.usage), by:{dt.entity.host}, from:-7d, interval:1h
 timeseries write_rate=avg(dt.host.disk.io.write, rate:1s), by:{dt.entity.host}
 timeseries errors=sum(dt.service.request.count, default:0, filter:{status=="ERROR"}), nonempty:true, by:{dt.entity.service}

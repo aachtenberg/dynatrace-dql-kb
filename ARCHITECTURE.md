@@ -1,103 +1,85 @@
-# Architecture & How-To
+# Architecture and how-to
 
-How the Dynatrace DQL Knowledge Base fits together, and how to run every part of
-it. For the quick pitch and feature list, see the [README](README.md).
+How the pieces fit, and how to run each one. The short version is the [README](README.md).
 
 ---
 
-## How it all works
+## How it fits together
 
-The repo has one job: stop LLMs from hallucinating Dynatrace Query Language. It
-does that by keeping a **knowledge base** of correct DQL facts and feeding the
-relevant parts to whatever model is writing a query — a Copilot agent, your own
-MCP-aware agent, or the bundled RAG CLI.
+The repo keeps correct DQL in `docs/` and hands the relevant pages to whatever model is writing the query.
 
-There are three stages: **populate** the knowledge base, **ingest** it into a
-vector store, and **consume** it from an agent.
+Copilot reads the files directly. Search and generation go through a local vector store. Only the metric-key refresh and the trace profiler talk to Dynatrace.
 
 ```mermaid
 flowchart TB
-    DT[("Dynatrace Tenant<br/>(Grail)")]
+    DT[("Your Dynatrace environment")]
 
-    subgraph populate["1 - Populate (periodic)"]
+    subgraph populate["1. Refresh from the tenant"]
         FETCH["dt_fetch.py"]
     end
-    DT -->|"DQL: metrics / describe"| FETCH
+    DT -->|"metric keys and field lists"| FETCH
 
-    subgraph kb["Knowledge Base - docs/"]
-        AUTHORED["Authored references<br/>syntax, examples,<br/>wrong-vs-right, dashboards"]
-        ENVDOCS["metric_keys.md<br/>entity_schemas.md<br/>(env-specific)"]
+    subgraph kb["docs/"]
+        AUTHORED["Written by hand<br/>syntax, examples, Kubernetes, dashboards"]
+        ENVDOCS["metric_keys.md<br/>entity_schemas.md<br/>from your tenant"]
     end
     FETCH -->|writes| ENVDOCS
 
-    subgraph ingest["2 - Ingest"]
-        ING["dql_rag.py ingest<br/>(chunk + embed)"]
-        CHROMA[("ChromaDB<br/>vectors")]
+    subgraph ingest["2. Index, optional"]
+        ING["dql_rag.py ingest<br/>split into chunks and embed"]
+        CHROMA[("Local vector store")]
     end
     AUTHORED --> ING
     ENVDOCS --> ING
     ING --> CHROMA
 
-    subgraph consume["3 - Consume"]
-        MCP["mcp_server.py<br/>(Docker, MCP stdio)"]
-        CLI["dql_rag.py<br/>query / interactive"]
-        COPILOT[".github/<br/>Copilot agents"]
+    subgraph consume["3. Ask a question"]
+        MCP["MCP server"]
+        CLI["dql_rag.py query"]
+        COPILOT["Copilot agents"]
     end
     CHROMA --> MCP
     CHROMA --> CLI
-    AUTHORED -. "workspace context" .-> COPILOT
-    ENVDOCS -. "workspace context" .-> COPILOT
+    AUTHORED -. "reads the files" .-> COPILOT
+    ENVDOCS -. "reads the files" .-> COPILOT
 
-    AGENT(["Your AI agent"]) <-->|"dql_search / dql_generate"| MCP
+    AGENT(["Your agent"]) <-->|"dql_search or dql_generate"| MCP
     USER(["You"]) --> CLI
     USER --> COPILOT
 ```
 
-**1 - Populate.** The generic DQL grammar is authored by hand in `docs/`
-(`dql_syntax_reference.md`, `dql_example_queries.md`, …). The two
-*environment-specific* files — `metric_keys.md` and `entity_schemas.md` — are
-generated from a live tenant by [`dt_fetch.py`](dt_fetch.py), which runs DQL
-against the Dynatrace Grail API. Each generated file is stamped with the query
-date so you know how fresh it is (see [Data provenance](#data-provenance)).
+| Step | What happens | Talks to the network? |
+|------|----------------|------------------------|
+| Refresh | `dt_fetch.py` writes metric keys and field names from your tenant. The date is in the file header. | Your tenant only |
+| Index | `dql_rag.py ingest` splits `docs/` and stores vectors locally (`all-MiniLM-L6-v2`). No model API key. | Only while downloading the embedder the first time |
+| Ask | Copilot reads `docs/` as files. MCP and the CLI search the vector store. | The model call, if you turn generation on |
 
-**2 - Ingest.** `dql_rag.py ingest` chunks every file in `docs/`, embeds the
-chunks locally with `all-MiniLM-L6-v2` (no API key needed for embeddings), and
-stores them in a local ChromaDB vector database.
+Copilot does not use the vector store. MCP and `dql_rag.py` do.
 
-**3 - Consume.** Three independent front-ends read the same knowledge base:
+### What a question does
 
-- **MCP server** (`mcp_server.py`, shipped as a Docker image) — exposes the KB
-  to any MCP-aware agent as tools. This is the primary integration path.
-- **RAG CLI** (`dql_rag.py query` / `interactive`) — a standalone terminal tool.
-- **GitHub Copilot agents** (`.github/`) — read `docs/` as workspace context;
-  no ingest or vector DB involved.
-
-### What a query looks like
-
-The MCP server offers two tools. `dql_search` is pure retrieval (no LLM key);
-`dql_generate` adds an LLM call and is only registered when a provider is
-configured.
+`dql_search` only retrieves. `dql_generate` is registered when a provider is set, and it writes the query.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as AI Agent
-    participant M as mcp_server.py
-    participant C as ChromaDB
-    participant L as LLM (optional)
+    participant A as Agent
+    participant M as MCP server
+    participant C as Vector store
+    participant L as Model, optional
 
-    A->>M: dql_search("hosts with CPU > 90%")
-    M->>C: embed query + similarity search
-    C-->>M: top-K relevant doc chunks
-    M-->>A: DQL reference snippets
-    Note over A: the agent's own model<br/>writes DQL from the snippets
+    A->>M: dql_search "hosts with CPU above 90%"
+    M->>C: find similar chunks
+    C-->>M: top 10 pages
+    M-->>A: DQL snippets
+    Note over A: the agent's own model writes the query
 
-    opt generation enabled
-        A->>M: dql_generate("hosts with CPU > 90%")
-        M->>C: retrieve context
-        M->>L: system prompt + context + question
-        L-->>M: finished DQL + explanation
-        M-->>A: DQL query
+    opt generation is on
+        A->>M: dql_generate "hosts with CPU above 90%"
+        M->>C: find similar chunks
+        M->>L: instructions plus snippets plus the question
+        L-->>M: the query
+        M-->>A: the query
     end
 ```
 
@@ -105,17 +87,17 @@ sequenceDiagram
 
 ## Components
 
-| File / dir | Role | Needs network? |
-|------------|------|----------------|
-| `docs/` (authored) | Hand-written DQL grammar, examples, wrong-vs-right, dashboard schema | No |
-| `docs/metric_keys.md`, `docs/entity_schemas.md` | Env-specific, generated from a live tenant | Generated by `dt_fetch.py` |
-| `dt_fetch.py` | Populates the env-specific docs via the Grail query API | Yes (to the tenant) |
-| `util/` | Operational utilities. `dt_trace_profiler` ranks trace entry points using the same Grail client. Excluded from the MCP image | Yes (to the tenant) |
-| `dql_rag.py` | Chunk + embed + retrieve + (optional) LLM call; CLI | Only for the LLM call |
-| `mcp_server.py` | MCP server wrapping retrieval + generation as tools | No (retrieval); yes for `dql_generate` |
-| `Dockerfile` | Builds the MCP image; ingests + caches the model at build time | At build only |
-| `.github/` | Copilot instructions and `@dql-expert` / `@dashboard-builder` agents | No |
-| ChromaDB (`chroma_db/`) | Local vector store, built by `ingest` (gitignored) | No |
+| File | Role | Network |
+|------|------|---------|
+| `docs/` (written by hand) | Syntax, examples, Kubernetes, wrong-vs-right, dashboard schema | No |
+| `docs/metric_keys.md`, `docs/entity_schemas.md` | From your tenant | Written by `dt_fetch.py` |
+| `dt_fetch.py` | Pulls those two files from the Grail query API | Your tenant |
+| `util/` | Trace profiler. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
+| `dql_rag.py` | Index, search, and an optional model call | The model call only |
+| `mcp_server.py` | Same search and generation, as MCP tools | Generation only |
+| `Dockerfile` | Builds the MCP image and indexes `docs/` at build time | At build only |
+| `.github/` | Copilot instructions and the two agents | No |
+| `chroma_db/` | Local vector store from `ingest`. Gitignored | No |
 
 ---
 
@@ -123,17 +105,16 @@ sequenceDiagram
 
 ### Prerequisites
 
-- Python 3.12. On Debian/Ubuntu the stdlib venv needs `sudo apt install
-  python3-venv python3-pip`, or use [`uv`](https://github.com/astral-sh/uv).
-- Docker (for the MCP container path).
-- A Dynatrace tenant URL + token (only to populate env-specific docs).
+- Python 3.10 or newer, already installed. No admin rights and no `pip install` for the Dynatrace tools. `./quickstart.sh` finds it, including on Windows Git Bash where `python3` is the Microsoft Store alias.
+- A Dynatrace platform URL and token, only if you want to refresh the env-specific docs or run the trace profiler.
+- Docker, or permission to download from PyPI and Hugging Face, only for the MCP server and the RAG CLI.
 
-### 1. Populate the environment-specific docs
+### 1. Refresh metric keys and field names
 
 ```bash
 cp .env.example .env          # fill in DT_ENVIRONMENT_URL and DT_API_TOKEN
-python dt_fetch.py test       # verify auth + connectivity (one tiny query)
-python dt_fetch.py all        # write metric_keys.md + entity_schemas.md
+./dt_fetch.sh test            # verify auth + connectivity (one tiny query)
+./dt_fetch.sh all             # write metric_keys.md + entity_schemas.md
 ```
 
 Token auth scheme is auto-detected: classic API tokens (`dt0c01…`) use
@@ -163,13 +144,15 @@ Register it with your MCP client (Claude Code/Desktop, Cursor, …):
 }
 ```
 
-Enable the `dql_generate` tool by passing a provider at runtime:
+With no provider set, the server offers `dql_search` only. The IDE model, following `@dql-expert` or `@dashboard-builder`, writes the DQL. To turn on `dql_generate`, point it at Bedrock's Converse API or at a private server (`ollama`, `vllm`, or `openai_compatible`). Ollama is called on native `/api/chat` with `OLLAMA_NUM_CTX` (default 16384); vLLM and `openai_compatible` use `/v1/chat/completions`. The 2026-09-24 model comparison and the test plan are in [evaluations/ollama-dql.md](evaluations/ollama-dql.md). Bedrock looks like this:
 
 ```bash
 docker run --rm -i \
-  -e LLM_PROVIDER=ollama \
-  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-  -e OLLAMA_MODEL=qwen3.6:27b \
+  -e LLM_PROVIDER=bedrock \
+  -e BEDROCK_REGION=us-east-1 \
+  -e BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
   dql-kb-mcp
 ```
 
@@ -209,15 +192,14 @@ python dql_rag.py ingest              # re-embed (CLI path)
 docker build -t dql-kb-mcp .          # rebuild the image (MCP path)
 ```
 
-`ingest` upserts by content hash, so unchanged chunks are cheap and re-running
-is safe.
+`ingest` skips chunks whose text did not change, so re-running it is safe.
 
 ---
 
-## Data provenance
+## Where the generated files come from
 
-`docs/metric_keys.md` and `docs/entity_schemas.md` are **generated**, and each
-carries a header recording the source tenant and the UTC time it was queried:
+`docs/metric_keys.md` and `docs/entity_schemas.md` are generated. Each header
+records the tenant and the UTC time of the query:
 
 ```
 # Auto-generated by dt_fetch.py from https://<env>.apps.dynatrace.com

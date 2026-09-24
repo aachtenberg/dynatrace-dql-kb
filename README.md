@@ -1,10 +1,53 @@
 # Dynatrace DQL Knowledge Base
 
-DQL reference docs, Copilot agents, an MCP server, and a RAG pipeline that make LLMs produce **working** Dynatrace Query Language instead of the usual hallucinated garbage.
+Models often write DQL that Dynatrace rejects: `fetch` on a metric, `by:` without braces, SQL keywords, made-up metric keys. This repo is the reference that keeps the query valid.
 
-For when Copilot, Claude or ChatGPT confidently writes DQL that Dynatrace rejects — `fetch` on a metric, `by:` without braces, SQL keywords, invented metric keys. The knowledge base here is the grounding that stops it. Use it through [GitHub Copilot agents](#github-copilot-agents), through any MCP client (Claude Code, Claude Desktop, Cursor) via [`mcp_server.py`](mcp_server.py), or through the local RAG pipeline.
+Use it from VS Code, from any MCP client, or from the command line. [ARCHITECTURE.md](ARCHITECTURE.md) is the map and the how-to.
 
-> New here? [**ARCHITECTURE.md**](ARCHITECTURE.md) explains how it all fits together (with diagrams) and has a step-by-step how-to.
+```mermaid
+flowchart TD
+    Q["Your question"] --> IDE["VS Code"]
+    Q --> MCP["MCP client"]
+    Q --> CLI["dql_rag.py"]
+    IDE --> Agents["@dql-expert writes DQL<br/>@dashboard-builder writes a dashboard"]
+    MCP --> Search["dql_search returns matching pages"]
+    Search --> Own["The client's model writes the query"]
+    MCP --> Gen["dql_generate writes the query"]
+    CLI --> Gen
+    Gen --> Need["Needs Bedrock, Ollama, or another private server"]
+```
+
+## Start here
+
+Built for a desktop you do not administer: a bank or an insurer, where `pip install` and Docker Hub are blocked. The tools that talk to Dynatrace use the Python standard library. They do not need a virtualenv.
+
+```bash
+git clone https://github.com/aachtenberg/dynatrace-dql-kb.git
+cd dynatrace-dql-kb
+./quickstart.sh
+```
+
+`./quickstart.sh` only checks that Python 3.10+ actually starts. On Windows Git Bash that is `python` or `py -3`. The `python3` command there is often the Microsoft Store alias, and the scripts skip it.
+
+What works with no install and no outbound network except your Dynatrace tenant:
+
+| You want | Command |
+|----------|---------|
+| Copilot agents | Open the folder in VS Code. Nothing else. |
+| Your tenant's metric keys and field names | `./dt_fetch.sh test` then `./dt_fetch.sh all` |
+| Trace entry points that look like batch jobs | `./util/dt_trace_profiler.sh --days 1 --shape-top 5 --min-runs 10 --max-runs 500` |
+
+Copy `.env.example` to `.env` first. `DT_ENVIRONMENT_URL` must be `https://<env-id>.apps.dynatrace.com` with no path. `https://<env-id>.live.dynatrace.com` returns 404 on the Grail query API. Use a platform token (`dt0s16`) created in that same environment. A corporate proxy is honored via `HTTPS_PROXY`. If TLS inspection fails certificate checks, set `SSL_CERT_FILE` to your company CA bundle.
+
+| Path | Who writes the DQL | Install |
+|------|--------------------|---------|
+| Copilot agents | The model in the IDE | None |
+| `dql_search` | The client's model, using the snippets | Docker, or `./quickstart.sh --with-rag` |
+| `dql_generate` and `dql_rag.py query` | The model you name | Same, plus Bedrock, Ollama, or another private server |
+
+This repo does not call a public model API unless you point it at one. vLLM and most private servers use `POST /v1/chat/completions`. Ollama is called on its own `/api/chat`, because its `/v1` route ignores the context-window setting and drops the retrieved pages. Which Ollama tag to run is in [evaluations/ollama-dql.md](evaluations/ollama-dql.md). That file stays out of `docs/` so ingest does not treat the bake-off as DQL reference.
+
+Search and generation download PyTorch and an embedding model, so build them where PyPI and Hugging Face are allowed, then copy the image or the `.venv` across. After the image is built it runs with no network. Generation stays off until you set a provider.
 
 ## GitHub Copilot Agents
 
@@ -25,7 +68,7 @@ Writes syntactically correct DQL queries. Knows the critical rules that LLMs alw
 ```
 
 ### `@dashboard-builder`
-Generates Grail/Platform dashboard JSON (the new format, not Classic). Knows the full tile schema, grid layout system, all visualization types, and Terraform deployment with `dynatrace_document`.
+Writes a current-format dashboard as JSON. That is the Dashboards app, not a Classic dashboard. It knows the tile types, the grid, and Terraform `dynatrace_document`.
 
 ```
 @dashboard-builder create a host overview dashboard with CPU, memory, and error logs
@@ -52,7 +95,8 @@ The `docs/` directory contains DQL reference material:
 | File | What's in it |
 |------|-------------|
 | `dql_syntax_reference.md` | Commands, functions, operators, data types — the full language reference |
-| `dql_example_queries.md` | 40+ working query examples: hosts, logs, spans, K8s, entities, advanced patterns |
+| `dql_example_queries.md` | Working queries: hosts, logs, spans, Kubernetes, entities |
+| `kubernetes.md` | Container CPU, restarts, and how to tell a cluster is k3s |
 | `dql_tips_and_patterns.md` | Common mistakes and how to avoid them |
 | `dql_wrong_vs_right.md` | 17 explicit wrong→right pairs for every hallucination LLMs produce |
 | `dashboard_json_schema.md` | Grail dashboard JSON format, tile types, visualizations, Terraform |
@@ -69,10 +113,12 @@ Queries the Dynatrace Grail API directly and writes both docs. Stdlib only — n
 
 ```bash
 cp .env.example .env          # then fill in DT_ENVIRONMENT_URL and DT_API_TOKEN
-python dt_fetch.py test       # verify token + connectivity (one tiny query)
-python dt_fetch.py all        # populate metric_keys.md + entity_schemas.md
-# or individually: python dt_fetch.py metrics | schemas
+./dt_fetch.sh test            # verify token + connectivity (one tiny query)
+./dt_fetch.sh all             # populate metric_keys.md + entity_schemas.md
+# or individually: ./dt_fetch.sh metrics | ./dt_fetch.sh schemas
 ```
+
+`./dt_fetch.sh` is a thin wrapper around `dt_fetch.py`. It finds a working Python and forwards every argument. No packages are installed.
 
 `.env` config (also read from real environment variables):
 
@@ -113,13 +159,20 @@ A utility, separate from the knowledge base and the MCP image. It ranks trace en
 ./util/dt_trace_profiler.sh --help                  # all options
 ```
 
-It runs in three stages, aggregating in DQL wherever possible because Grail bills by data scanned:
+Grail bills by data scanned, so each stage aggregates in DQL.
+
+```mermaid
+flowchart LR
+    S1["1. Profile<br/>how often it runs, how long"] --> S2["2. Cadence<br/>are the gaps regular"]
+    S2 --> S3["3. Shape<br/>how many spans and DB calls"]
+    S3 --> Score["Score 0 to 6"]
+```
 
 | Stage | What it does | Cost |
 |-------|--------------|------|
 | 1. Profile | Run count and p50/p95 duration per entry point (service + endpoint + span kind) | One aggregated query over the window |
-| 2. Cadence | Pulls root-span start times and measures how regular the gaps between runs are, and how often runs start on a minute boundary | One scan per batch of ~150 entry points, only for entry points inside the `--min-runs`/`--max-runs` band |
-| 3. Shape | Counts total spans and DB spans for the three most recent runs of the top candidates | Narrow per-run windows sized from p95 duration |
+| 2. Cadence | Root-span start times: how regular the gaps are, and how often a run starts on a minute boundary | One scan per batch of ~150 entry points, only inside the `--min-runs` / `--max-runs` band |
+| 3. Shape | Span count and DB span count for the three most recent runs of the top candidates | Narrow windows sized from p95 duration |
 
 Each entry point gets a 0-6 score: non-server root span (+1), clockwork cadence (+2, or +1 if merely regular), minute-aligned starts (+1), p50 over 30s (+1), high span or DB fan-out (+1). Cadence regularity is MAD/median of the gaps between runs, so missed runs and weekday-only schedules still read as regular. Random traffic lands around 0.6-0.7; scheduled jobs sit near 0. Parallel root spans starting within 5s of each other count as one run.
 
@@ -184,34 +237,52 @@ Add this to your MCP client config (e.g. Claude Code / Desktop
 Your agent now has a `dql_search` tool grounded in this KB — point it at a
 question and it writes DQL using real syntax and your environment's metric keys.
 
-### Enable `dql_generate` (optional)
+### Enable `dql_generate` (optional, Bedrock Converse)
 
-Pass an LLM provider at runtime and the generation tool registers itself:
+Leave this off unless the only approved model API is Amazon Bedrock. With nothing set, the server offers `dql_search` only, and the IDE model writes the query.
 
 ```bash
 docker run --rm -i \
-  -e LLM_PROVIDER=ollama \
-  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-  -e OLLAMA_MODEL=qwen3.6:27b \
+  -e LLM_PROVIDER=bedrock \
+  -e BEDROCK_REGION=us-east-1 \
+  -e BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID \
+  -e AWS_SECRET_ACCESS_KEY \
+  -e AWS_SESSION_TOKEN \
   dql-kb-mcp
-# or: -e LLM_PROVIDER=anthropic -e ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-With no provider configured the server simply offers `dql_search` only.
+`BEDROCK_MODEL_ID` is the id your platform team enabled. In most accounts that is a cross-region inference profile (`us.` or `eu.` prefix), not the bare foundation-model id. boto3 signs the Converse call with the standard AWS credential chain, so an IAM role or an SSO session works the same way and no API key is stored in this repo. The identity needs `bedrock:InvokeModel` on that model. `boto3` is installed with the RAG requirements; it is not imported until a Bedrock call is made.
+
+A private inference server uses the same chat-completions client. Pick the name that matches what is running, or `openai_compatible` if it is something else:
+
+```bash
+# Ollama
+-e LLM_PROVIDER=ollama -e OLLAMA_BASE_URL=http://ollama.internal:11434 -e OLLAMA_MODEL=qwen3:8b -e OLLAMA_NUM_CTX=16384
+
+# vLLM
+-e LLM_PROVIDER=vllm -e VLLM_BASE_URL=http://vllm.internal:8000 -e VLLM_MODEL=your-served-model-name
+
+# anything else that serves POST /v1/chat/completions
+-e LLM_PROVIDER=openai_compatible -e PRIVATE_BASE_URL=http://inference.internal:8080 -e PRIVATE_MODEL=your-model-name
+```
+
+The base URL can be the host root or already end in `/v1`. `PRIVATE_API_KEY` is only needed when that server checks a bearer token. Ollama ignores it.
 
 > **Reaching Ollama from the container.** `host.docker.internal` resolves to the
 > host on Docker Desktop (macOS/Windows). On Linux, either add
 > `--add-host=host.docker.internal:host-gateway`, or just point
-> `OLLAMA_BASE_URL` straight at the host/LAN IP (e.g. `http://192.168.0.150:11434`).
+> `OLLAMA_BASE_URL` straight at the host (e.g. `http://127.0.0.1:11434`).
 
 The image is ~2.5 GB (CPU-only PyTorch + the embedding model, baked in). It runs fully offline — verified with `docker run --network none`.
 
 ### Run without Docker
 
+Only where PyPI and Hugging Face are reachable. A plain `pip install` pulls the multi-gigabyte CUDA build of PyTorch; the script below installs the CPU build instead.
+
 ```bash
-pip install -r requirements-mcp.txt   # base deps + the MCP SDK
-python dql_rag.py ingest              # build the vector DB once
-python mcp_server.py                  # serve over stdio
+./quickstart.sh --with-rag
 ```
 
 ## RAG Pipeline (Optional)
@@ -221,10 +292,10 @@ A standalone CLI tool that uses the same knowledge base with a local vector DB f
 ### Quick Start
 
 ```bash
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-./quickstart.sh
+./quickstart.sh --with-rag
 ```
+
+`./quickstart.sh` with no arguments does not install anything. `--with-rag` creates `.venv`, installs the CPU PyTorch build plus `requirements-mcp.txt`, and ingests the docs. After that, retrieval needs no model API. To generate a query from the CLI instead of the IDE, set `LLM_PROVIDER` to `bedrock`, `ollama`, `vllm`, or `openai_compatible`.
 
 > **Prerequisite (Debian/Ubuntu):** the stdlib `venv`/`pip` flow needs the
 > `python3-venv` and `python3-pip` packages. If `python -m venv` fails with an
@@ -244,28 +315,29 @@ uv run python dql_rag.py interactive
 Or configure manually:
 
 ```bash
-# Pick a provider:
-export LLM_PROVIDER=ollama                          # local
-export OLLAMA_MODEL=qwen3.6:27b
-export OLLAMA_BASE_URL=http://192.168.0.150:11434
+# Private server. Ollama is shown; vllm and openai_compatible are the same client.
+export LLM_PROVIDER=ollama
+export OLLAMA_BASE_URL=http://127.0.0.1:11434
+export OLLAMA_MODEL=qwen3:8b
+export OLLAMA_NUM_CTX=16384
 
-# OR
-export LLM_PROVIDER=anthropic && export ANTHROPIC_API_KEY=sk-ant-...
+# Or Bedrock Converse. Credentials are the normal AWS chain, not a key in the repo.
+# export LLM_PROVIDER=bedrock
+# export BEDROCK_REGION=us-east-1
+# export BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 
-# OR
-export LLM_PROVIDER=openai && export OPENAI_API_KEY=sk-...
-
-# Ingest and query:
-python dql_rag.py ingest
 python dql_rag.py query "Show me error logs from the payment service"
-python dql_rag.py interactive
 ```
 
 ### Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `LLM_PROVIDER` | `anthropic` | `anthropic`, `openai`, `azure_openai`, or `ollama` |
+| `LLM_PROVIDER` | unset | Leave unset for IDE-only use. `bedrock` is the Converse API. `ollama` uses native `/api/chat`. `vllm` and `openai_compatible` use `/v1/chat/completions`. |
+| `OLLAMA_MODEL` | `qwen3:8b` | Best tag for DQL generation in the 2026-09-24 snapshot. See [evaluations/ollama-dql.md](evaluations/ollama-dql.md). |
+| `OLLAMA_NUM_CTX` | `16384` | Context window for the Ollama call. The server default is 4096, which truncates this prompt. |
+| `BEDROCK_MODEL_ID` | empty | Required for `bedrock`. Inference-profile id or foundation-model id. |
+| `BEDROCK_REGION` | `AWS_REGION`, else `us-east-1` | Bedrock Runtime region. |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local sentence-transformer model |
 | `CHUNK_SIZE` | `800` | Tokens per chunk (~4 chars/token) |
 | `CHUNK_OVERLAP` | `100` | Overlap between chunks |
@@ -282,9 +354,12 @@ python dql_rag.py interactive
 │   └── agents/
 │       ├── dql-expert.md                # @dql-expert agent
 │       └── dashboard-builder.md         # @dashboard-builder agent
-├── docs/                                # Knowledge base
+├── evaluations/
+│   └── ollama-dql.md                    # Private-model test plan and 2026-09-24 results
+├── docs/                                # Knowledge base (ingested; keep eval notes out)
 │   ├── dql_syntax_reference.md
 │   ├── dql_example_queries.md
+│   ├── kubernetes.md
 │   ├── dql_tips_and_patterns.md
 │   ├── dql_wrong_vs_right.md
 │   ├── dashboard_json_schema.md
@@ -294,11 +369,13 @@ python dql_rag.py interactive
 ├── mcp_server.py                        # MCP server (dql_search + dql_generate)
 ├── Dockerfile                           # Builds the MCP server image
 ├── dt_fetch.py                          # Populate env docs from a live Dynatrace tenant
+├── dt_fetch.sh                          # Wrapper; finds Python, forwards args
 ├── util/
+│   ├── find_python.sh                   # First Python that actually starts
 │   ├── dt_trace_profiler.py             # Rank trace entry points, flag likely batch jobs
 │   └── dt_trace_profiler.sh             # Wrapper; forwards args to the profiler
 ├── .env.example                         # Template for DT_ENVIRONMENT_URL / DT_API_TOKEN
-├── quickstart.sh                        # Quick start (Ollama)
+├── quickstart.sh                        # Check Python; --with-rag installs the optional stack
 ├── requirements.txt                     # Python dependencies (RAG CLI)
 └── requirements-mcp.txt                 # + MCP SDK (for mcp_server.py / Docker)
 ```
