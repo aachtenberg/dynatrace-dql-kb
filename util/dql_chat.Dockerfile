@@ -2,9 +2,10 @@
 # is no pip step and no model download; the image is python:3.12-slim plus
 # this repo's text files.
 #
-# Build from the repo root (BuildKit, the default since Docker 23, reads
-# util/dql_chat.Dockerfile.dockerignore instead of the root .dockerignore):
-#   docker build -f util/dql_chat.Dockerfile -t dql-chat .
+# Build from the repo root with BuildKit, which reads
+# util/dql_chat.Dockerfile.dockerignore instead of the root .dockerignore.
+# The legacy builder reads the root one and fails on COPY dt_fetch.py.
+#   docker buildx build --load -f util/dql_chat.Dockerfile -t dql-chat .
 #
 # Run on your machine (the log prints a link with the access token):
 #   docker run --rm -p 8750:8750 --env-file .env dql-chat

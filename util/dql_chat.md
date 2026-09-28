@@ -92,11 +92,13 @@ ACCOUNT=123456789012 REGION=us-east-1
 REPO=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com/dql-chat
 aws ecr create-repository --repository-name dql-chat --region $REGION
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT.dkr.ecr.$REGION.amazonaws.com
-docker build -f util/dql_chat.Dockerfile -t $REPO:1 .
+docker buildx build --load -f util/dql_chat.Dockerfile -t $REPO:1 .
 docker push $REPO:1
 ```
 
-The image is about 180 MB (python:3.12-slim plus text files), runs as `nobody`, and has a health check on `/healthz`.
+Build with BuildKit (`docker buildx build`): it reads `util/dql_chat.Dockerfile.dockerignore`. The legacy builder, which plain `docker build` still falls back to on some installs, reads the root `.dockerignore` instead and stops with `COPY failed: ... dt_fetch.py`.
+
+The image is about 120 MB (python:3.12-slim plus text files), runs as `nobody`, and has a health check on `/healthz`.
 
 ### 2. Task definition
 
