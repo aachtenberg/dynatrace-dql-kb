@@ -1,6 +1,8 @@
 # dql_agent runbook
 
-`util/dql_agent.sh` puts a Bedrock model in a loop with your DQL docs and your Dynatrace tenant. It writes a query, runs it, reads Grail's error or the records, and answers. This page covers setting it up, checking it works, day-to-day use, recipes, and what to do when it fails.
+`util/dql_agent.sh` puts a model (Amazon Bedrock by default) in a loop with your DQL docs and your Dynatrace tenant. It writes a query, runs it, reads Grail's error or the records, and answers. This page covers setting it up, checking it works, day-to-day use, recipes, and what to do when it fails.
+
+The same agent runs as a browser chat that also draws charts and graphs from its queries: `./util/dql_chat.sh`, see [dql_chat.md](dql_chat.md). Everything on this page applies to both.
 
 Run every command from the repo root. This file sits outside `docs/` on purpose: `docs/` is the DQL reference the agent searches.
 
@@ -14,7 +16,7 @@ Run every command from the repo root. This file sits outside `docs/` on purpose:
 | An AWS identity allowed to call Bedrock | Your AWS or platform team | `./util/dql_agent.sh --check` |
 | A Bedrock model enabled in that account | Your AWS or platform team | `./util/dql_agent.sh --check` |
 
-Nothing gets installed. The only outbound connections are to your tenant and to `bedrock-runtime.<region>.amazonaws.com`.
+Nothing gets installed. The only outbound connections are to your tenant and to the model: `bedrock-runtime.<region>.amazonaws.com` by default.
 
 ## 2. One-time setup
 
@@ -90,11 +92,14 @@ The agent takes the first of these it finds:
 | Order | Source | Typical use |
 |-------|--------|-------------|
 | 1 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Keys pasted from the AWS access portal ("Command line access") |
-| 2 | `~/.aws/credentials`, profile `AWS_PROFILE` or `default` | Long-lived keys, or keys written by a company login tool |
-| 3 | `aws configure export-credentials` | AWS CLI with SSO or an assumed role; also AWS CloudShell |
-| 4 | `AWS_BEARER_TOKEN_BEDROCK` | A Bedrock API key, if your account issues them |
+| 2 | `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` | A pod on EKS with an IAM role for its service account |
+| 3 | `~/.aws/credentials`, profile `AWS_PROFILE` or `default` | Long-lived keys, or keys written by a company login tool |
+| 4 | The container credentials endpoint | An ECS or Fargate task role, EKS Pod Identity, AWS CloudShell |
+| 5 | `aws configure export-credentials` | AWS CLI with SSO or an assumed role |
+| 6 | The EC2 instance metadata service (IMDSv2) | An EC2 instance role |
+| – | `AWS_BEARER_TOKEN_BEDROCK` | A Bedrock API key, if your account issues them; replaces all of the above |
 
-Keys pasted from the portal expire, usually after 1–12 hours. Paste fresh ones when `--check` reports expired credentials.
+Temporary credentials are renewed a few minutes before they expire, so a long-running chat server keeps working. Metadata endpoints are called directly, never through `HTTPS_PROXY`. Keys pasted from the portal expire, usually after 1–12 hours. Paste fresh ones when `--check` reports expired credentials.
 
 ### 2.5 Fill in your tenant's names
 
@@ -115,15 +120,18 @@ This writes `docs/metric_keys.md` and `docs/entity_schemas.md`. The agent's `fin
 A healthy run looks like this. The exit code is 0.
 
 ```
-docs:    231 sections, 903 metric keys and fields, from .../docs
+docs:    242 sections, 903 metric keys and fields, from .../docs
+llm:     Amazon Bedrock (LLM_PROVIDER=unset)
+model:   us.anthropic.claude-sonnet-5-… in us-east-1
 aws:     environment variables
-model:   us.anthropic.claude-sonnet-5-… in us-east-1 (default, looked up)
-         Converse answered: 'OK'
+         (default, looked up)
+         answered: 'OK'
+         tool use: OK
 tenant:  https://<env-id>.apps.dynatrace.com
          query ran, 1 record(s)
 ```
 
-Every line that fails prints the reason and a hint, and the exit code is 1. See [Troubleshooting](#6-troubleshooting).
+`tool use: OK` means the model called a test tool when asked; the agent cannot work with a model that does not. Every line that fails prints the reason and a hint, and the exit code is 1. See [Troubleshooting](#6-troubleshooting).
 
 ## 4. Day-to-day use
 
@@ -262,22 +270,21 @@ CloudShell has to reach your tenant. A CloudShell that runs inside a VPC may not
 BEDROCK_MODEL_ID=<id from the list> ./util/dql_agent.sh --check
 ```
 
-Any model that supports tool use in Converse works. Sonnet 5 is the default because this is a multi-step job in a niche language: search, check names, run, read Grail's error, fix. Stronger models get there in fewer rounds. A cheaper model such as Amazon Nova is worth trying when cost matters or when it is the model your AWS team has already approved; give it the same questions you asked Sonnet and compare the queries it ends up running (`/last`).
+Any model that supports tool use works. Models outside Bedrock (vLLM, a LiteLLM gateway, Azure OpenAI, Ollama, the Anthropic API) are set with `LLM_PROVIDER`; the table is in [dql_chat.md](dql_chat.md#model-providers). `--check` and `--models` work for each. Sonnet 5 is the default because this is a multi-step job in a niche language: search, check names, run, read Grail's error, fix. Stronger models get there in fewer rounds. A cheaper model such as Amazon Nova is worth trying when cost matters or when it is the model your AWS team has already approved; give it the same questions you asked Sonnet and compare the queries it ends up running (`/last`).
 
 ### Call it from your own app (Flask, a bot, a notebook)
 
 ```python
 import sys
 sys.path.insert(0, "/path/to/dynatrace-dql-kb/util")   # the repo root is found from there
-import dql_agent as da
+from dqlagent import core, llm
 
-agent = da.Agent(da.Bedrock(da.BEDROCK_MODEL_ID, da.BEDROCK_REGION),
-                 da.DocIndex(), can_run=True, approve="always")
+agent = core.Agent(llm.make_model(), core.DocIndex(), can_run=True, approve="always")
 answer = agent.ask("which hosts had CPU above 90% in the last hour?")
 last_query = agent.last_query
 ```
 
-Create one `Agent` per user conversation. `approve="ask"` reads from the terminal, so in a web app use `"always"` or `"never"` and put your own approval step in front of it. Tool activity is printed to stderr.
+Create one `Agent` per user conversation. `llm.make_model()` follows `LLM_PROVIDER` like the CLI. `approve="ask"` reads from the terminal by default; in a web app pass `approver=` a function that asks your user, or use `"always"`/`"never"`. Pass `on_event=` to receive each step instead of printing it, and `visuals_on=True` to get chart and graph specs; [dql_chat.md](dql_chat.md#use-it-from-your-own-app) has a Flask example. `import dql_agent as da` with `da.Agent(da.Bedrock(...), ...)` still works.
 
 ## 6. Troubleshooting
 

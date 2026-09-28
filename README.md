@@ -7,8 +7,8 @@ flowchart TD
     Q["Your question"] --> IDE["VS Code"]
     Q --> MCP["MCP client"]
     Q --> CLI["dql_rag.py"]
-    Q --> Chat["util/dql_agent.sh"]
-    Chat --> Loop["A Bedrock model writes DQL, runs it on your tenant,<br/>and answers from the records"]
+    Q --> Chat["util/dql_agent.sh (terminal)<br/>util/dql_chat.sh (browser)"]
+    Chat --> Loop["A model writes DQL, runs it on your tenant,<br/>answers from the records, draws charts and graphs"]
     IDE --> Agents["@dql-expert writes DQL<br/>@dashboard-builder writes a dashboard"]
     MCP --> Search["dql_search returns matching pages"]
     Search --> Own["The client's model writes the query"]
@@ -23,6 +23,7 @@ It is built for an enterprise desktop you do not administer, where `pip install`
 |------|--------------------|---------|
 | [Copilot agents](#github-copilot-agents) | The model in the IDE | None |
 | [`util/dql_agent.sh`](#ask-your-tenant-through-bedrock) | A Bedrock model, which also runs the query on your tenant and answers from the records | None; needs an AWS account with Bedrock |
+| [`util/dql_chat.sh`](#in-your-browser-with-charts-and-graphs) | The same agent as a browser chat that draws charts and graphs from its queries | None; runs locally or as a container on AWS |
 | [`dql_search`](#mcp-server) | Your MCP client's model, using the snippets | Docker, or `./quickstart.sh --with-rag` |
 | [`dql_generate` and `dql_rag.py query`](#generating-queries-outside-the-ide) | The model you configure | Same, plus Bedrock, Ollama, or another private server |
 
@@ -74,10 +75,21 @@ dql> which hosts had CPU above 90% in the last hour?
 - **Grounded in the repo's DQL skill:** every call carries `.github/agents/dql-expert.md` (the rules Copilot's `@dql-expert` uses), and each query is checked locally for the classic mistakes (`where`, `fetch` on a metric, `by:` without braces, a missing comma after `fetch <source>`) before Grail sees it.
 - **You approve every query** before it runs, unless you pass `--yes` or type `/auto`. `--no-run` only writes queries. Without `DT_ENVIRONMENT_URL` it writes queries and does not run them.
 - **Cost guard:** each query is capped at 50 GB scanned (`DQL_AGENT_SCAN_LIMIT_GB`), and the scanned size is shown after it runs.
-- **AWS credentials** are read from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`, then `~/.aws/credentials` (`AWS_PROFILE`), then `aws configure export-credentials` if the AWS CLI is installed (SSO and assumed roles). A Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` also works. The identity needs `bedrock:InvokeModel` on the model.
+- **AWS credentials** come from the usual places: environment keys, `~/.aws/credentials` (`AWS_PROFILE`), `aws configure export-credentials` for SSO, and in AWS the task, pod or instance role. A Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK` also works. The identity needs `bedrock:InvokeModel` on the model.
+- **Not on Bedrock?** `LLM_PROVIDER` switches to vLLM, a LiteLLM or other OpenAI-compatible gateway, Azure OpenAI, Ollama, or the Anthropic API. The table is in [util/dql_chat.md](util/dql_chat.md#model-providers).
 - **What leaves the machine:** your question, doc excerpts, and up to 50 records per query go to Bedrock in your AWS account. Nothing goes to a public model API.
 - Setup for the AWS team, recipes and troubleshooting: [util/dql_agent.md](util/dql_agent.md).
 - Run `./dt_fetch.sh all` first. The agent checks names against `docs/metric_keys.md` and `docs/entity_schemas.md`, so it is only as good as those two files.
+
+### In your browser, with charts and graphs
+
+```bash
+./util/dql_chat.sh        # opens http://127.0.0.1:8750/?t=<token>
+```
+
+The same agent as a chat page. Each query waits in a card for **Run**, **Don't run**, or a typed change; its records are one click away. When a picture helps, the model draws a line chart, a bar chart or a React Flow graph (who calls whom, what a problem affects) **from the records of a query it ran**; it names the result and fields and never types the numbers. Every chart has a table view. **Settings** sets turns per question, output tokens per turn, and for Bedrock the region and model, picked from the account's list.
+
+Standard library only; React Flow is vendored, so nothing is installed and nothing loads from a CDN. It listens on 127.0.0.1 with a per-start token. For a team, it runs as a container on ECS behind a load balancer that signs users in. Details, security model and AWS deployment: [util/dql_chat.md](util/dql_chat.md).
 
 ## GitHub Copilot agents
 
@@ -228,5 +240,6 @@ PRIVATE_MODEL=your-model-name
 
 ## Also in this repo
 
+- **Browser chat** — `./util/dql_chat.sh`, above. Container: `util/dql_chat.Dockerfile`.
 - **Trace profiler** — `./util/dt_trace_profiler.sh` ranks trace entry points and flags the ones that look like batch jobs. Standard library only. See [util/dt_trace_profiler.md](util/dt_trace_profiler.md).
 - **Evaluations** — [evaluations/](evaluations/) holds model test results. It stays out of `docs/` so they are not ingested as DQL reference.
