@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DQL chat</title>
+<link rel="stylesheet" href="vendor/xyflow-react.css">
+<link rel="stylesheet" href="app.css">
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/jsx-runtime-shim.js"></script>
+<script src="vendor/xyflow-react.umd.js"></script>
+<script src="markdown.js"></script>
+<script src="charts.js"></script>
+<script src="flow.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">DQL chat</div>
+  <div class="meta" id="meta">Connecting…</div>
+  <div class="actions">
+    <label class="toggle" title="Queries run as soon as the model writes them. Each one is still checked for common DQL mistakes first.">
+      <input type="checkbox" id="auto"> Run queries without asking
+    </label>
+    <button type="button" id="btn-settings" class="ghost">Settings</button>
+    <button type="button" id="btn-new" class="ghost">New chat</button>
+  </div>
+</header>
+
+<main id="log" aria-live="polite"></main>
+
+<form id="composer" autocomplete="off">
+  <textarea id="input" rows="1" placeholder="Ask about your tenant, e.g. any open problems right now?"></textarea>
+  <button type="submit" id="send" class="primary">Send</button>
+</form>
+
+<aside id="settings" class="drawer" hidden aria-labelledby="settings-title">
+  <div class="drawer-head">
+    <h2 id="settings-title">Settings</h2>
+    <button type="button" id="settings-close" class="ghost" aria-label="Close settings">Close</button>
+  </div>
+  <p id="settings-provider" class="muted"></p>
+  <form id="settings-form"></form>
+  <p id="settings-msg" class="settings-msg" role="status"></p>
+  <div class="drawer-actions">
+    <button type="button" id="settings-save" class="primary">Save</button>
+    <button type="button" id="settings-cancel" class="ghost">Cancel</button>
+  </div>
+  <p class="muted small">Changing the model or region starts a new chat. Turns and output tokens apply from the next question.</p>
+</aside>
+</body>
+</html>
