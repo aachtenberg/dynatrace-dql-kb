@@ -361,12 +361,13 @@ class SSEWriter:
 
 def chat_providers() -> list[str]:
     """Providers the browser may pick from, the server's own (LLM_PROVIDER)
-    first. DQL_CHAT_PROVIDERS lists them; "auto" (the default) adds a local
-    Ollama when one answers at OLLAMA_BASE_URL. URLs and keys stay here."""
+    first. DQL_CHAT_PROVIDERS lists them; "auto" (the default) adds every
+    provider set up in the environment, and an Ollama that answers at
+    OLLAMA_BASE_URL. URLs and keys stay here."""
     main = llm.provider_name()
     raw = (os.getenv("DQL_CHAT_PROVIDERS") or "auto").strip().lower()
     if raw == "auto":
-        names = [main] + (["ollama"] if main != "ollama" and llm.ollama_up() else [])
+        names = llm.configured_providers()
     else:
         names = [main] + [p.strip() for p in raw.split(",") if p.strip()]
     names = list(dict.fromkeys(names))

@@ -10,7 +10,8 @@ Neutral format
              {"type": "tool_result", "id": str, "name": str, "text": str, "is_error": bool}
              {"type": "raw", "provider": str, "data": ...}
                  provider-only content (reasoning or thinking blocks) that must
-                 be sent back unchanged on the next call
+                 be sent back unchanged on the next call. For the Responses API
+                 it is {"output": [item, ...]}: the whole reply, replayed as is
     tool     {"name": str, "description": str, "schema": JSON schema}
     reply    {"content": [block, ...], "stop": "end" | "tool_use" | "max_tokens" | "refusal"}
 
@@ -24,6 +25,10 @@ dql_rag.py reads, so one .env configures both:
     openai              OPENAI_API_KEY, OPENAI_MODEL
     azure_openai        AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY,
                         AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION
+                        (openai and azure_openai use the Responses API;
+                        OPENAI_API=chat switches to chat completions, and
+                        OPENAI_API=responses makes vllm and openai_compatible
+                        use it too)
     anthropic           ANTHROPIC_API_KEY, ANTHROPIC_MODEL (needs the
                         `anthropic` package; everything else is stdlib)
 """
@@ -94,6 +99,9 @@ def _http_json(url: str, body: dict | None, headers: dict, what: str,
                 continue
             raise _http_error(what, e) from None
         except urllib.error.URLError as e:
+            if isinstance(e.reason, ConnectionRefusedError) and attempt < 2:
+                time.sleep(1.5)     # a gateway that briefly refuses, as Azure's can
+                continue
             host = urllib.parse.urlsplit(url).netloc
             raise ModelError(f"Cannot reach {what} at {host}: {e.reason}.") from None
         except (http.client.HTTPException, OSError) as e:
@@ -344,7 +352,8 @@ def bedrock_options(client: "aws.Bedrock") -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI-compatible chat completions (vLLM, LiteLLM, Azure OpenAI, OpenAI, ...)
+# OpenAI-compatible: chat completions or the Responses API
+# (vLLM, LiteLLM, Azure OpenAI, OpenAI, ...)
 # ---------------------------------------------------------------------------
 
 def _v1(url: str) -> str:
@@ -383,6 +392,12 @@ class OpenAICompatModel(ChatModel):
                              "LLM_PROVIDER=openai_compatible.")
         if preset in ("openai", "azure_openai") and not self.conf["key"]:
             raise ModelError(f"No API key for {self.label}.")
+        self.api = (os.getenv("OPENAI_API") or "").strip().lower() or (
+            "responses" if preset in ("openai", "azure_openai") else "chat")
+        if self.api not in ("chat", "responses"):
+            raise ModelError(f"OPENAI_API must be chat or responses, not {self.api!r}.")
+        if self.api == "responses":
+            self.default_max_tokens = 16000     # reasoning tokens count against it
 
     @classmethod
     def settings_fields(cls):
@@ -391,9 +406,12 @@ class OpenAICompatModel(ChatModel):
                  "help": "The model name the server serves (for Azure, the deployment)."}]
 
     def describe(self):
-        return [f"model:   {self.settings['model']} at {self.conf['base']}"]
+        return [f"model:   {self.settings['model']} at {self.conf['base']}",
+                f"api:     {'Responses' if self.api == 'responses' else 'chat completions'}"]
 
     def _url(self, path: str) -> str:
+        if self.preset == "azure_openai" and path == "/responses":
+            return f"{self.conf['base']}/openai/v1/responses"      # v1: no api-version
         if self.preset == "azure_openai":
             version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
             dep = urllib.parse.quote(self.settings["model"], safe="")
@@ -409,12 +427,16 @@ class OpenAICompatModel(ChatModel):
 
     def model_options(self):
         if self.preset == "azure_openai":
-            return []
+            # Azure lists base models, not deployments; offer the one in .env.
+            dep = self.conf["model"]
+            return [{"value": dep, "label": dep, "detail": "deployment"}] if dep else []
         data = _http_json(self._url("/models"), None, self._headers(), self.label, timeout=20)
         ids = sorted(m.get("id", "") for m in data.get("data", []) if m.get("id"))
         return [{"value": i, "label": i} for i in ids if model_allowed(i)]
 
     def chat(self, system, messages, tools, max_tokens=None):
+        if self.api == "responses":
+            return self._responses(system, messages, tools, max_tokens)
         msgs = [{"role": "system", "content": system}] if system else []
         for m in messages:
             if m["role"] == "assistant":
@@ -458,6 +480,82 @@ class OpenAICompatModel(ChatModel):
                             "name": fn.get("name", ""), "input": parsed})
         stop = {"tool_calls": "tool_use", "length": "max_tokens",
                 "content_filter": "refusal"}.get(choice.get("finish_reason", ""), "end")
+        return {"content": content, "stop": stop}
+
+    def _responses(self, system, messages, tools, max_tokens):
+        """POST /responses. Like Converse, the conversation is a list of typed
+        items. store=false keeps nothing on the provider's side, so each reply's
+        output items (encrypted reasoning, messages, calls) go back verbatim."""
+        items = []
+        for m in messages:
+            replay = next((b["data"]["output"] for b in m["content"] if b.get("type") == "raw"
+                           and b.get("provider") == self.provider
+                           and isinstance(b.get("data"), dict) and "output" in b["data"]), None)
+            if replay is not None:
+                items.extend(replay)
+                continue
+            for b in m["content"]:
+                t = b.get("type")
+                if t == "text" and b.get("text"):
+                    items.append({"role": m["role"], "content": b["text"]})
+                elif t == "tool_call":
+                    items.append({"type": "function_call", "call_id": b["id"], "name": b["name"],
+                                  "arguments": json.dumps(b.get("input") or {})})
+                elif t == "tool_result":
+                    text = b.get("text") or "(empty)"
+                    items.append({"type": "function_call_output", "call_id": b["id"],
+                                  "output": ("ERROR: " + text) if b.get("is_error") else text})
+        body = {"model": self.settings["model"], "input": items, "store": False,
+                "max_output_tokens": max_tokens or self.default_max_tokens}
+        if system:
+            body["instructions"] = system
+        if tools:
+            body["tools"] = [{"type": "function", "name": t["name"], "description": t["description"],
+                              "parameters": t["schema"]} for t in tools]
+        if self.preset in ("openai", "azure_openai") and not getattr(self, "_no_encrypted", False):
+            body["include"] = ["reasoning.encrypted_content"]
+        try:
+            data = _http_json(self._url("/responses"), body, self._headers(), self.label)
+        except ModelError as e:
+            if "include" not in body or "encrypted" not in str(e).lower():
+                raise
+            self._no_encrypted = True       # a model without reasoning
+            body.pop("include")
+            data = _http_json(self._url("/responses"), body, self._headers(), self.label)
+        if data.get("status") == "failed" or data.get("error"):
+            err = data.get("error") or {}
+            raise ModelError(f"{self.label}: {err.get('message') or err.get('code') or 'the response failed'}.")
+        output = data.get("output") or []
+        content, refused = [], False
+        for item in output:
+            t = item.get("type")
+            if t == "message":
+                for c in item.get("content") or []:
+                    if c.get("type") == "output_text" and c.get("text"):
+                        content.append({"type": "text", "text": c["text"]})
+                    elif c.get("type") == "refusal":
+                        refused = True
+                        content.append({"type": "text", "text": c.get("refusal") or "(refused)"})
+            elif t == "function_call":
+                args = item.get("arguments") or "{}"
+                try:
+                    parsed = json.loads(args)
+                except ValueError:
+                    parsed = {"_invalid_arguments": str(args)[:500]}
+                content.append({"type": "tool_call", "id": item.get("call_id") or item.get("id", ""),
+                                "name": item.get("name", ""),
+                                "input": parsed if isinstance(parsed, dict) else {"value": parsed}})
+        if output:
+            content.append({"type": "raw", "provider": self.provider, "data": {"output": output}})
+        reason = (data.get("incomplete_details") or {}).get("reason", "")
+        if refused or reason == "content_filter":
+            stop = "refusal"
+        elif reason == "max_output_tokens":
+            stop = "max_tokens"
+        elif any(b["type"] == "tool_call" for b in content):
+            stop = "tool_use"
+        else:
+            stop = "end"
         return {"content": content, "stop": stop}
 
 
@@ -702,6 +800,25 @@ PROVIDERS = {
 
 def provider_name() -> str:
     return (os.getenv("LLM_PROVIDER") or "bedrock").strip().lower()
+
+
+def configured_providers() -> list[str]:
+    """LLM_PROVIDER first, then every other provider whose settings are in the
+    environment. Bedrock counts only when it is LLM_PROVIDER (credentials can
+    come from anywhere), and Ollama only when it answers."""
+    env = os.getenv
+    found = [p for p, ready in [
+        ("azure_openai", env("AZURE_OPENAI_ENDPOINT") and env("AZURE_OPENAI_API_KEY")),
+        ("openai", env("OPENAI_API_KEY")),
+        ("anthropic", env("ANTHROPIC_API_KEY")),
+        ("vllm", env("VLLM_BASE_URL")),
+        ("openai_compatible", env("PRIVATE_BASE_URL") and env("PRIVATE_MODEL")),
+    ] if ready]
+    main = provider_name()
+    others = [p for p in found if p != main]
+    if main != "ollama" and ollama_up():
+        others.append("ollama")
+    return [main] + others
 
 
 # (label, short label) for pickers.

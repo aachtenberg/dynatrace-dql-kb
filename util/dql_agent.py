@@ -144,6 +144,32 @@ def list_models(match: str = "") -> int:
     return 0 if ok else 1
 
 
+def _check_model(provider: str, main: str) -> bool:
+    """Ask one provider for a reply and a tool call. Prints what happened."""
+    try:
+        model = make_model(provider)
+        role = "default" if provider == main else "also set up"
+        print(f"llm:     {model.label} ({role}, LLM_PROVIDER={provider})")
+        for line in model.describe():
+            print(line)
+        if provider == "bedrock":
+            how = "BEDROCK_MODEL_ID" if BEDROCK_MODEL_ID else "default, looked up"
+            print(f"         ({how})")
+        reply = model.chat("", [{"role": "user", "content": [
+            {"type": "text", "text": "Reply with the word OK."}]}], [])
+        print(f"         answered: {llm._text(reply['content']).strip()[:40]!r}")
+        reply = model.chat("You are testing tool calls.", [{"role": "user", "content": [
+            {"type": "text", "text": "Call the ping tool now."}]}], [PING_TOOL])
+        if any(b.get("type") == "tool_call" and b.get("name") == "ping" for b in reply["content"]):
+            print("         tool use: OK")
+            return True
+        print("         tool use: FAILED. The model answered without calling the "
+              "tool; the agent needs a model that supports tool use.")
+    except ModelError as e:
+        print(f"llm:     {provider} FAILED\n{e}")
+    return False
+
+
 def check() -> int:
     ok = True
     index = DocIndex()
@@ -153,29 +179,14 @@ def check() -> int:
     if "Auto-generated" not in (DOCS_DIR / "metric_keys.md").read_text(encoding="utf-8")[:500]:
         print("         metric_keys.md looks like the placeholder; run ./dt_fetch.sh all")
 
-    provider = llm.provider_name()
-    try:
-        model = make_model()
-        print(f"llm:     {model.label} (LLM_PROVIDER={os.getenv('LLM_PROVIDER') or 'unset'})")
-        for line in model.describe():
-            print(line)
-        if provider == "bedrock":
-            how = "BEDROCK_MODEL_ID" if BEDROCK_MODEL_ID else "default, looked up"
-            print(f"         ({how})")
-        reply = model.chat("", [{"role": "user", "content": [
-            {"type": "text", "text": "Reply with the word OK."}]}], [], 512)
-        print(f"         answered: {llm._text(reply['content']).strip()[:40]!r}")
-        reply = model.chat("You are testing tool calls.", [{"role": "user", "content": [
-            {"type": "text", "text": "Call the ping tool now."}]}], [PING_TOOL], 1024)
-        if any(b.get("type") == "tool_call" and b.get("name") == "ping" for b in reply["content"]):
-            print("         tool use: OK")
-        else:
-            ok = False
-            print("         tool use: FAILED. The model answered without calling the "
-                  "tool; the agent needs a model that supports tool use.")
-    except ModelError as e:
+    # Every provider set up in .env, so a failing default does not hide one that
+    # works. The exit code follows the default, the one the agent uses.
+    main, *others = llm.configured_providers()
+    works = [p for p in [main, *others] if _check_model(p, main)]
+    if main not in works:
         ok = False
-        print(f"llm:     FAILED\n{e}")
+        if works:
+            print(f"         {works[0]} works. To use it, add LLM_PROVIDER={works[0]} to .env.")
 
     if _tenant_configured():
         print(f"tenant:  {dt_fetch.DT_ENVIRONMENT_URL}")
@@ -197,7 +208,8 @@ def main() -> int:
                     "It writes DQL, runs it, and answers from the result.")
     ap.add_argument("question", nargs="*", help="ask once and exit")
     ap.add_argument("--check", action="store_true",
-                    help="test the model, tool use and the tenant")
+                    help="test the tenant and each model set up in .env "
+                         "(fails only if the default model or the tenant does)")
     ap.add_argument("--models", nargs="?", const="", metavar="FILTER",
                     help="list the models you can use, optionally only those matching FILTER")
     ap.add_argument("--yes", "-y", action="store_true",

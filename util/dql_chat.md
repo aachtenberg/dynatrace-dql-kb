@@ -7,12 +7,12 @@ Same agent as `./util/dql_agent.sh`. Token, AWS access and troubleshooting are i
 ## Quick start
 
 ```bash
-cp .env.example .env          # DT_ENVIRONMENT_URL, DT_API_TOKEN; BEDROCK_REGION for Bedrock
-./util/dql_agent.sh --check   # model and tenant; says which one fails
+cp .env.example .env          # your tenant, and one model: Bedrock, Azure or Ollama
+./util/dql_agent.sh --check   # tests the tenant and each model; says what to fix
 ./util/dql_chat.sh            # opens the chat
 ```
 
-History is a SQLite file the chat creates. A local Ollama is offered when one is running. If the default model is not enabled in your AWS account, the chat says so and lets you pick another.
+History is a SQLite file the chat creates. The model picker offers every provider set up in `.env`, and a local Ollama when one is running. If the default model is not enabled in your AWS account, the chat says so and lets you pick another.
 
 ```bash
 ./util/dql_chat.sh --no-browser             # print the link
@@ -91,7 +91,7 @@ Theme and run mode stay in this browser. Model, region, turns and output tokens 
 | Run queries without asking | — | Same as the mode pill. Needs a tenant. |
 | Provider | when more than one is offered | Bedrock or Ollama, for example. Each provider keeps the model you last picked. |
 | Turns per question | all | Model calls for one question. 1–30, default 10. A search, name check, query or chart is one call. |
-| Max output tokens per turn | all | Caps one reply, thinking included. 256–64,000. Default 16,000 for Claude, 4,096 otherwise. |
+| Max output tokens per turn | all | Caps one reply, thinking included. 256–64,000. Default 16,000 for Claude and the Responses API, 4,096 otherwise. |
 | AWS region | Bedrock | Where Bedrock is called. The model list follows it. |
 | Model or inference profile | Bedrock | From the account's profiles and on-demand models, or typed. Empty uses the Claude Sonnet 5 profile for the region. |
 | Model | OpenAI-compatible, vLLM, Azure OpenAI, Ollama, Anthropic | Filled from the server's list where it has one. For Azure, this is the deployment name. |
@@ -125,22 +125,80 @@ The agent talks to models through adapters in `dqlagent/llm.py`. The terminal ag
 | `ollama` | Ollama's native `/api/chat` (so `num_ctx` is honored) | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX` |
 | `vllm` | vLLM, `POST /v1/chat/completions` | `VLLM_BASE_URL`, `VLLM_MODEL`, `PRIVATE_API_KEY` |
 | `openai_compatible` | Anything that serves `/v1/chat/completions` (LiteLLM, a company gateway) | `PRIVATE_BASE_URL`, `PRIVATE_MODEL`, `PRIVATE_API_KEY` |
-| `azure_openai` | Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` |
-| `openai` | OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| `azure_openai` | Azure OpenAI, Responses API at `/openai/v1/responses` | `AZURE_OPENAI_ENDPOINT` (`https://<resource>.openai.azure.com`), `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` |
+| `openai` | OpenAI, Responses API | `OPENAI_API_KEY`, `OPENAI_MODEL` |
 | `anthropic` | Anthropic API, through the official SDK | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (default `claude-sonnet-5`). Needs `pip install anthropic`. |
 
-The model must support tool use. `./util/dql_agent.sh --check` asks it to call a tool and says if it did not.
+`OPENAI_API` picks the OpenAI wire format. Unset, `openai` and `azure_openai` use the Responses API and the others use chat completions. `chat` sends `openai` and `azure_openai` to chat completions; for Azure that is the deployment URL with `AZURE_OPENAI_API_VERSION`. `responses` sends `vllm` and `openai_compatible` to `/v1/responses`. Responses calls set `store: false`, so the provider keeps no copy of the conversation. Reasoning models send back their reasoning encrypted, and the adapter returns it with the tool results, as it does for Bedrock.
 
-`LLM_PROVIDER` is the server's default. `DQL_CHAT_PROVIDERS` lists the others users may switch to, comma-separated, for example `bedrock,ollama`. The default, `auto`, adds a local Ollama when one answers at `OLLAMA_BASE_URL` at start. URLs and keys still come from the server's environment.
+The model must support tool use. `./util/dql_agent.sh --check` asks each provider set up in `.env` to call a tool, and says which ones work.
+
+`LLM_PROVIDER` is the server's default. With `DQL_CHAT_PROVIDERS=auto`, the default, the picker also offers every other provider that is set up in `.env`, plus an Ollama that answers at `OLLAMA_BASE_URL`. Otherwise `DQL_CHAT_PROVIDERS` is a fixed, comma-separated list, for example `bedrock,ollama`. URLs and keys always come from the server's environment.
 
 For Ollama, the picker offers models that can call tools (`/api/show` capabilities). Others are greyed out. Embedding models are left out. A local model on a shared GPU can take minutes per turn.
+
+### Azure AI Foundry
+
+You need an Azure subscription and the Azure CLI, signed in with `az login`. Set these two for the commands below:
+
+```bash
+RG=my-resource-group
+AI=my-foundry-resource        # also the subdomain of its endpoint
+```
+
+**1. A Foundry resource.** Skip this if you have one. `az cognitiveservices account list -o table` lists yours.
+
+```bash
+az group create -n $RG -l eastus2
+az cognitiveservices account create -g $RG -n $AI -l eastus2 \
+  --kind AIServices --sku S0 --custom-domain $AI
+```
+
+**2. A model deployment.** GlobalStandard bills per token, with no standing cost. `--sku-capacity` is thousands of tokens per minute.
+
+```bash
+az cognitiveservices account deployment create -g $RG -n $AI \
+  --deployment-name gpt-5-mini --model-name gpt-5-mini \
+  --model-version 2025-08-07 --model-format OpenAI \
+  --sku-name GlobalStandard --sku-capacity 50
+```
+
+Any model with tool calling works, if your subscription has quota for it. New subscriptions often have none for the newest models: the deployment fails with `InsufficientQuota ... the quota limit is 0`. This lists the models you do have quota for:
+
+```bash
+az cognitiveservices usage list -l eastus2 -o table \
+  --query "[?limit>\`0\` && contains(name.value, 'GlobalStandard')].{model:name.value, limit:limit}"
+```
+
+To get more, use **Quotas** in [ai.azure.com](https://ai.azure.com) to request it.
+
+**3. The `.env`.** The resource already has two keys; this copies one in without printing it.
+
+```bash
+{ echo "LLM_PROVIDER=azure_openai"
+  echo "AZURE_OPENAI_ENDPOINT=https://$AI.openai.azure.com"
+  echo "AZURE_OPENAI_DEPLOYMENT=gpt-5-mini"
+  echo "AZURE_OPENAI_API_KEY=$(az cognitiveservices account keys list -g $RG -n $AI --query key1 -o tsv)"
+} >> .env
+```
+
+Leave out `LLM_PROVIDER` to keep Bedrock as the default. The chat's picker offers Azure either way.
+
+**4. Check it.** Run `./util/dql_agent.sh --check`.
+
+Good to know:
+- **Model field:** the picker offers `AZURE_OPENAI_DEPLOYMENT`. For another deployment, type its name, not the model name.
+- **Older deployments:** a model without reasoning is retried without encrypted reasoning, on its own. A resource without the v1 API needs `OPENAI_API=chat`.
+- **Portal instead of the CLI:** in [ai.azure.com](https://ai.azure.com), go to **Models + endpoints**, then **Deploy model**. The key and endpoint are on the resource's overview page.
+- **Keys:** only API keys work. A resource with local auth turned off (Entra ID only) is refused with HTTP 401 or 403.
+- **Budget:** set one in the portal under **Cost Management**, then **Budgets**, scoped to the resource group.
 
 ## Security
 
 - **On your machine** (`DQL_CHAT_AUTH=token`, the default) the server listens on 127.0.0.1 only. The link it prints carries a random token, and every API call must send it. Requests must come from the chat's own host and origin, so another site open in the same browser cannot drive the chat.
 - The page loads only its own files. Nothing comes from a CDN. Text from the model or the tenant is inserted as text, never as HTML.
 - The Dynatrace token and the model credentials stay on the server. The browser never sees them.
-- **Leaves the machine:** your question, doc excerpts, and up to 50 records per query, sent to the model. Queries go to your tenant.
+- **Leaves the machine:** your question, doc excerpts, and up to 50 records per query, sent to the model the user picks. Any provider with a key in `.env` can be picked, so remove keys you do not want used, or set `DQL_CHAT_PROVIDERS` to a fixed list. Queries go to your tenant.
 - **Stays on disk:** the chats and their query results, when history is on. Theme and run mode stay in the browser. The access token stays in the tab.
 - **Audit:** each query, and each open-problems check, is one JSON line on stdout (`event`, `user`, `query`, `records`, `scanned`). `DQL_CHAT_AUDIT=full` adds the questions. `off` stops it.
 
@@ -156,7 +214,7 @@ For Ollama, the picker offers models that can call tools (`/api/show` capabiliti
 | `DQL_CHAT_AUTO_RUN` | `0` | `1` starts a browser in "Run automatically" until its user picks a mode |
 | `DQL_CHAT_ALLOW_SETTINGS` | `1` | `0` fixes the settings |
 | `DQL_CHAT_ALLOWED_MODELS` | any | See Settings |
-| `DQL_CHAT_PROVIDERS` | `auto` | Providers users may pick besides `LLM_PROVIDER`, e.g. `bedrock,ollama`; `auto` adds a local Ollama if it answers |
+| `DQL_CHAT_PROVIDERS` | `auto` | Providers users may pick besides `LLM_PROVIDER`, e.g. `bedrock,ollama`; `auto` adds every provider set up in `.env`, and an Ollama that answers |
 | `DQL_CHAT_HISTORY` | `1` | `0` keeps chats in memory only (`--no-history`) |
 | `DQL_CHAT_DB` | `~/.local/share/dql-chat/chats.db` | The history file (`--history-db`); `/data/chats.db` in the container |
 | `DQL_CHAT_RETENTION_DAYS` | `90` | Chats untouched this long are deleted; `0` keeps them |
