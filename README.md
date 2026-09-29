@@ -35,9 +35,9 @@ On Windows Git Bash the scripts skip the Microsoft Store `python3` alias and use
 
 Ask in plain language ("any open problems?", "who calls checkout?"). A model searches `docs/`, checks every metric and field name against your tenant, runs the query, and answers from the records: a short summary first, then anything **worth a look**. When Grail rejects a query, the model reads the error and fixes it.
 
-- **Browser, `./util/dql_chat.sh`:** charts and React Flow graphs drawn from the query's records (never from numbers the model typed), chats kept to reopen later, open Davis problems on the welcome screen, and a model picker across Bedrock and Ollama. It runs locally, or as a container on AWS ([how to build and deploy it](util/dql_chat.md#deploy-the-container-on-aws)). See [util/dql_chat.md](util/dql_chat.md).
+- **Browser, `./util/dql_chat.sh`:** charts and React Flow graphs drawn from the query's records (never from numbers the model typed), chats kept to reopen later, open Davis problems on the welcome screen, and a model picker across Bedrock, Ollama and [Azure AI Foundry](util/dql_chat.md#azure-ai-foundry). It runs locally, or as a container on AWS ([how to build and deploy it](util/dql_chat.md#deploy-the-container-on-aws)). See [util/dql_chat.md](util/dql_chat.md).
 - **Terminal, `./util/dql_agent.sh`:** the same agent, including in AWS CloudShell. See [util/dql_agent.md](util/dql_agent.md) for AWS setup, recipes and troubleshooting.
-- **Safe by default:** you approve each query before it runs, each query is checked for the classic DQL mistakes first, and a query can scan at most 50 GB. Your question, doc excerpts and up to 50 records per query go to the model: Bedrock in your AWS account, or your own Ollama.
+- **Safe by default:** you approve each query before it runs, each query is checked for the classic DQL mistakes first, and a query can scan at most 50 GB. Your question, doc excerpts and up to 50 records per query go to the model: Bedrock in your AWS account, Azure AI Foundry in your subscription, or your own Ollama.
 
 Run `./dt_fetch.sh all` first. The agent checks names against `docs/metric_keys.md` and `docs/entity_schemas.md`, so it is only as good as those two files.
 

@@ -41,8 +41,16 @@ class Two(One):
 
 
 class ChatProvidersTest(unittest.TestCase):
+    def test_auto_adds_every_provider_set_up_in_env(self):
+        env = {"LLM_PROVIDER": "bedrock", "DQL_CHAT_PROVIDERS": "auto",
+               "AZURE_OPENAI_ENDPOINT": "https://x.openai.azure.com", "AZURE_OPENAI_API_KEY": "k"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(llm, "ollama_up", return_value=True):
+            self.assertEqual(web.chat_providers(), ["bedrock", "azure_openai", "ollama"])
+
     def test_auto_adds_a_local_ollama_that_answers(self):
-        with mock.patch.dict(os.environ, {"LLM_PROVIDER": "bedrock", "DQL_CHAT_PROVIDERS": "auto"}):
+        with mock.patch.dict(os.environ, {"LLM_PROVIDER": "bedrock", "DQL_CHAT_PROVIDERS": "auto",
+                                          "AZURE_OPENAI_API_KEY": "", "OPENAI_API_KEY": "",
+                                          "ANTHROPIC_API_KEY": "", "VLLM_BASE_URL": "", "PRIVATE_BASE_URL": ""}):
             with mock.patch.object(llm, "ollama_up", return_value=True):
                 self.assertEqual(web.chat_providers(), ["bedrock", "ollama"])
             with mock.patch.object(llm, "ollama_up", return_value=False):
@@ -185,3 +193,88 @@ class SwitchProviderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResponsesApiTest(unittest.TestCase):
+    """openai and azure_openai use the Responses API; reasoning and item ids round-trip."""
+
+    ENV = {"AZURE_OPENAI_ENDPOINT": "https://res.openai.azure.com/", "AZURE_OPENAI_API_KEY": "k",
+           "AZURE_OPENAI_DEPLOYMENT": "gpt-5", "OPENAI_API": ""}
+    REASONING = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc"}
+
+    def test_a_tool_call_then_an_answer(self):
+        replies = [
+            {"status": "completed", "output": [
+                self.REASONING,
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "dql_run",
+                 "arguments": '{"query": "fetch logs"}'}]},
+            {"status": "completed", "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}]},
+        ]
+        sent = []
+
+        def fake(url, body, headers, what, timeout=300, method=None):
+            sent.append((url, body, headers))
+            return replies[len(sent) - 1]
+
+        tools = [{"name": "dql_run", "description": "Run DQL", "schema": {"type": "object"}}]
+        with mock.patch.dict(os.environ, self.ENV), mock.patch.object(llm, "_http_json", fake):
+            model = llm.make_model("azure_openai")
+            messages = [{"role": "user", "content": [{"type": "text", "text": "errors?"}]}]
+            first = model.chat("be brief", messages, tools)
+            messages.append({"role": "assistant", "content": first["content"]})
+            messages.append({"role": "user", "content": [
+                {"type": "tool_result", "id": "call_1", "name": "dql_run", "text": "bad", "is_error": True}]})
+            second = model.chat("be brief", messages, tools)
+
+        self.assertEqual(first["stop"], "tool_use")
+        self.assertEqual(first["content"][1]["input"], {"query": "fetch logs"})
+        self.assertEqual(second, {"content": [{"type": "text", "text": "Done."}], "stop": "end"})
+        url, body, headers = sent[1]
+        self.assertEqual(url, "https://res.openai.azure.com/openai/v1/responses")
+        self.assertEqual(headers, {"api-key": "k"})
+        self.assertEqual(body["instructions"], "be brief")
+        self.assertFalse(body["store"])
+        self.assertEqual(body["tools"][0], {"type": "function", "name": "dql_run",
+                                            "description": "Run DQL", "parameters": {"type": "object"}})
+        self.assertEqual(body["input"], [
+            {"role": "user", "content": "errors?"},
+            self.REASONING,
+            {"type": "function_call", "call_id": "call_1", "name": "dql_run",
+             "arguments": '{"query": "fetch logs"}', "id": "fc_1"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "ERROR: bad"}])
+
+    def test_reasoning_without_a_tool_call_is_not_sent_back(self):
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(llm, "_http_json", return_value={"output": []}) as http:
+            llm.make_model("azure_openai").chat("", [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [{"type": "raw", "provider": "azure_openai", "data": self.REASONING},
+                                                  {"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "again"}]}], [])
+        self.assertEqual(http.call_args.args[1]["input"], [
+            {"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "again"}])
+
+    def test_cut_off_and_refused(self):
+        cases = [({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output": []},
+                  "max_tokens"),
+                 ({"output": [{"type": "message", "content": [{"type": "refusal", "refusal": "No."}]}]}, "refusal")]
+        for reply, stop in cases:
+            with mock.patch.dict(os.environ, self.ENV), mock.patch.object(llm, "_http_json", return_value=reply):
+                self.assertEqual(llm.make_model("azure_openai").chat("", [], [])["stop"], stop)
+
+    def test_the_picker_offers_the_azure_deployment(self):
+        with mock.patch.dict(os.environ, self.ENV):
+            self.assertEqual(llm.make_model("azure_openai").model_options(),
+                             [{"value": "gpt-5", "label": "gpt-5", "detail": "deployment"}])
+
+    def test_openai_api_chat_keeps_chat_completions(self):
+        with mock.patch.dict(os.environ, {**self.ENV, "OPENAI_API": "chat",
+                                          "AZURE_OPENAI_API_VERSION": "2024-10-21"}), \
+                mock.patch.object(llm, "_http_json", return_value={"choices": [{"message": {"content": "hi"}}]}) as http:
+            llm.make_model("azure_openai").chat("", [], [])
+        self.assertEqual(http.call_args.args[0], "https://res.openai.azure.com/openai/deployments/gpt-5"
+                                                 "/chat/completions?api-version=2024-10-21")
+        with mock.patch.dict(os.environ, {"VLLM_BASE_URL": "http://gpu:8000", "OPENAI_API": ""}):
+            self.assertEqual(llm.make_model("vllm").api, "chat")

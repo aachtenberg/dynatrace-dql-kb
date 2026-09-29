@@ -144,19 +144,12 @@ def list_models(match: str = "") -> int:
     return 0 if ok else 1
 
 
-def check() -> int:
-    ok = True
-    index = DocIndex()
-    names = NameIndex()
-    print(f"docs:    {len(index.chunks)} sections, {len(names.entries)} metric keys "
-          f"and fields, from {DOCS_DIR}")
-    if "Auto-generated" not in (DOCS_DIR / "metric_keys.md").read_text(encoding="utf-8")[:500]:
-        print("         metric_keys.md looks like the placeholder; run ./dt_fetch.sh all")
-
-    provider = llm.provider_name()
+def _check_model(provider: str, main: str) -> bool:
+    """Ask one provider for a reply and a tool call. Prints what happened."""
     try:
-        model = make_model()
-        print(f"llm:     {model.label} (LLM_PROVIDER={os.getenv('LLM_PROVIDER') or 'unset'})")
+        model = make_model(provider)
+        role = "default" if provider == main else "also set up"
+        print(f"llm:     {model.label} ({role}, LLM_PROVIDER={provider})")
         for line in model.describe():
             print(line)
         if provider == "bedrock":
@@ -169,13 +162,30 @@ def check() -> int:
             {"type": "text", "text": "Call the ping tool now."}]}], [PING_TOOL], 1024)
         if any(b.get("type") == "tool_call" and b.get("name") == "ping" for b in reply["content"]):
             print("         tool use: OK")
-        else:
-            ok = False
-            print("         tool use: FAILED. The model answered without calling the "
-                  "tool; the agent needs a model that supports tool use.")
+            return True
+        print("         tool use: FAILED. The model answered without calling the "
+              "tool; the agent needs a model that supports tool use.")
     except ModelError as e:
+        print(f"llm:     {provider} FAILED\n{e}")
+    return False
+
+
+def check() -> int:
+    ok = True
+    index = DocIndex()
+    names = NameIndex()
+    print(f"docs:    {len(index.chunks)} sections, {len(names.entries)} metric keys "
+          f"and fields, from {DOCS_DIR}")
+    if "Auto-generated" not in (DOCS_DIR / "metric_keys.md").read_text(encoding="utf-8")[:500]:
+        print("         metric_keys.md looks like the placeholder; run ./dt_fetch.sh all")
+
+    # Every provider set up in .env, so a failing default does not hide one that works.
+    main, *others = llm.configured_providers()
+    works = [p for p in [main, *others] if _check_model(p, main)]
+    if main not in works:
         ok = False
-        print(f"llm:     FAILED\n{e}")
+        if works:
+            print(f"         {works[0]} works. To use it, add LLM_PROVIDER={works[0]} to .env.")
 
     if _tenant_configured():
         print(f"tenant:  {dt_fetch.DT_ENVIRONMENT_URL}")

@@ -416,9 +416,10 @@ class Bedrock:
                 if e.code in (429, 503) and attempt < 2:
                     time.sleep(2 + 4 * attempt)
                     continue
-                raise BedrockError(
-                    f"Bedrock HTTP {e.code}: {detail}\n"
-                    f"{_bedrock_hint(e.code, str(detail), action, self.region)}") from None
+                hint = _bedrock_hint(e.code, str(detail), action, self.region)
+                if "security token" in str(detail).lower():
+                    hint += f" They came from {self.auth_source}."
+                raise BedrockError(f"Bedrock HTTP {e.code}: {detail}\n{hint}") from None
             except urllib.error.URLError as e:
                 host = urllib.parse.urlsplit(url).netloc
                 raise BedrockError(
@@ -443,6 +444,8 @@ class Bedrock:
         try:
             profiles = self.list_inference_profiles()
         except BedrockError as e:
+            if "security token" in str(e).lower():
+                raise                   # bad credentials, not a missing model id
             raise BedrockError(
                 "BEDROCK_MODEL_ID is not set, and the default model could not be "
                 "looked up. Set BEDROCK_MODEL_ID to the model or inference-profile "
