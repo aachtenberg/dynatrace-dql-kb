@@ -113,7 +113,15 @@
   }
 
   function nearBottom() { return log.scrollHeight - log.scrollTop - log.clientHeight < 120; }
-  function scroll(force) { if (force || nearBottom()) log.scrollTop = log.scrollHeight; }
+  // Follow new output while the reader is at the bottom. Decided before the
+  // output lands (a tall answer or chart would put the bottom out of reach),
+  // and dropped as soon as they scroll up to read.
+  var following = true;
+  log.addEventListener("scroll", function () { following = nearBottom(); }, { passive: true });
+  function scroll(force) {
+    if (force) following = true;
+    if (following) log.scrollTop = log.scrollHeight;
+  }
   function noteLine(text) { var n = el("div", "note-line", text); log.appendChild(n); scroll(true); return n; }
 
   // -- header, mode and model pills ----------------------------------------
@@ -324,6 +332,8 @@
   function newTurn() {
     var box = el("section", "turn");
     log.appendChild(box);
+    // Charts and graphs lay out after they are added; keep up as they grow.
+    if (window.ResizeObserver) new ResizeObserver(function () { scroll(); }).observe(box);
     var spinner = null, card = null, cards = [];
 
     function step(label, detail, cls) {
