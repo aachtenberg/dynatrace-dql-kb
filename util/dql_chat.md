@@ -1,33 +1,68 @@
 # DQL chat
 
-The DQL agent as a chat in your browser. Ask in plain language ("any open problems?", "who calls checkout?"). The model checks names against your tenant, runs the query, and answers from the records: a short summary, then **Worth a look** (an outlier, errors, one host carrying the load, a result that was cut off), then the query. When a picture helps, it draws a chart or a React Flow graph **from the query's records**, never from numbers it typed. Chats are kept so you can reopen them and carry on.
+The DQL agent as a chat in your browser. Ask in plain language ("any open problems?", "who calls checkout?"). The model checks names against your tenant, runs the query, and answers from the records: a short summary, then **Worth a look**, then the query. When a picture helps, it draws a chart or a graph from those records. Chats are kept so you can reopen them and carry on.
 
-It is the same agent as `./util/dql_agent.sh`; [dql_agent.md](dql_agent.md) covers the Dynatrace token, AWS access and troubleshooting. It uses the standard library only, and React Flow is vendored, so nothing is installed and nothing loads from a CDN.
+Same agent as `./util/dql_agent.sh`. Token, AWS access and troubleshooting are in [dql_agent.md](dql_agent.md). Nothing to install: standard library only, and React Flow is vendored.
 
 ## Quick start
 
 ```bash
-cp .env.example .env          # set DT_ENVIRONMENT_URL and DT_API_TOKEN; BEDROCK_REGION for Bedrock
-./util/dql_agent.sh --check   # says whether the model and the tenant work, and which one does not
-./util/dql_chat.sh            # opens the chat in your browser
+cp .env.example .env          # DT_ENVIRONMENT_URL, DT_API_TOKEN; BEDROCK_REGION for Bedrock
+./util/dql_agent.sh --check   # model and tenant; says which one fails
+./util/dql_chat.sh            # opens the chat
 ```
 
-That is all. Nothing to install and no database to set up: history goes to a SQLite file the chat creates, and a local Ollama is offered automatically when one is running. If the default model is not enabled for your AWS account, the chat says so and lets you pick another. **Everything below is optional.**
+History is a SQLite file the chat creates. A local Ollama is offered when one is running. If the default model is not enabled in your AWS account, the chat says so and lets you pick another.
 
 ```bash
-./util/dql_chat.sh --no-browser             # print the link instead of opening a browser
-./util/dql_chat.sh --no-history             # keep chats in memory only
-./util/dql_chat.sh --history-db ~/chats.db  # keep them in another file
+./util/dql_chat.sh --no-browser             # print the link
+./util/dql_chat.sh --no-history             # memory only
+./util/dql_chat.sh --history-db ~/chats.db  # another file
 ```
+
+The rest of this page is optional.
+
+| If you want to… | Go to |
+|-----------------|-------|
+| Learn the page | [Using it](#using-it) |
+| Change model, region, turns | [Settings](#settings) |
+| Keep or turn off past chats | [History](#history) |
+| Point it at Bedrock, Ollama, or another server | [Model providers](#model-providers) |
+| Lock it down, or see what leaves the machine | [Security](#security) |
+| Set variables | [Server settings](#server-settings) |
+| Run it on AWS | [Deploy the container on AWS](#deploy-the-container-on-aws) |
+| Call it from your own app | [Use it from your own app](#use-it-from-your-own-app) |
 
 ## Using it
 
-- **The message box** holds everything: type and press Enter (Shift+Enter for a new line). The round **↑** button sends; while an answer runs it becomes **■ Stop**, and Esc does the same. The pill on the left is the run mode, the one on the right the model.
-- **Each query asks first.** Its card shows **Run this query?** with three options, by click or key: **1** Yes, **2** Yes, and don't ask again (switches the mode to Run automatically), **3** No, and tell the model what to do differently ("last 24h instead", "only prod hosts"). Esc declines. The mode pill (**Ask before running** / **Run automatically**) switches it back. Every query is still checked for the usual DQL mistakes before it runs.
-- **Records** of every query are one click away under its card: up to 200 rows.
-- **Charts and graphs** carry a **Table** toggle and the query they were drawn from; the **⤢** button blows one up to fill the window (Esc restores). Line charts show every series at the pointer; arrow keys move the readout. Graphs pan, zoom and drag; node colour is the Smartscape type (host, process, service, …), and a ring marks what the model highlighted, usually the entities under **Worth a look**.
-- **Open problems** show on the welcome screen and as a badge in the top bar: the count, the categories and the newest ones. A click asks the agent about them. The server runs two fixed read-only queries (an exact count, and the newest few), cached for a minute, not the model's; `DQL_CHAT_PROBLEMS=0` turns them off.
-- **Recents** (the sidebar) lists your chats, newest first, titled by their first question. Click one to reopen it exactly as it looked, graphs included, and keep asking: the model has its earlier messages and query results. The **⋯** menu renames or deletes a chat. **New chat** starts another; the current one stays in Recents. A reload reopens the chat you were in.
+**Send.** Enter sends. Shift+Enter adds a line. The **↑** button sends, and becomes **■ Stop** while an answer runs. Esc stops too.
+
+The pill on the left is the run mode. The one on the right is the model.
+
+**Run a query.** Each query asks first. On the card, or by key:
+
+| Key | Does |
+|-----|------|
+| **1** | Yes |
+| **2** | Yes, and don't ask again (switches to Run automatically) |
+| **3** | No. Tell the model what to change ("last 24h instead", "only prod hosts") |
+| Esc | Decline |
+
+The mode pill switches **Ask before running** and **Run automatically**. Every query is still checked for the usual DQL mistakes before it runs.
+
+**Records.** Up to 200 rows, one click under the query card.
+
+**Charts and graphs.** Each one has a **Table** toggle and the query it was drawn from. **⤢** fills the window; Esc restores it.
+
+Line charts show every series at the pointer. Arrow keys move the readout. Graphs pan, zoom and drag. Node colour is the Smartscape type (host, process, service, …). A ring marks what the model highlighted, usually the entities under **Worth a look**.
+
+**Open problems.** The welcome screen and the top-bar badge show the count, the categories and the newest ones. A click asks the agent about them.
+
+The server runs two fixed read-only queries for this (an exact count, and the newest few), cached for a minute. The model does not write them. `DQL_CHAT_PROBLEMS=0` turns the check off.
+
+**Recents.** The sidebar lists your chats, newest first, titled by the first question. Open one to see it again, graphs included, and keep asking. The model still has its earlier messages and query results.
+
+**⋯** renames or deletes a chat. **New chat** starts another and leaves the current one in the list. A reload reopens the chat you were in.
 
 ### Commands
 
@@ -44,33 +79,41 @@ Type `/` in the message box for the list; arrows pick, Tab completes, Enter runs
 
 ## Settings
 
-The **settings** button (top right, or `/config`) opens a dialog. **Every change applies at once**; there is no Save button. Text and number fields apply on Enter or when you leave them, and show **Saved** or the server's error on their row. A new provider, model or region starts a new chat; the current one stays in Recents.
+Open them from the button at the top right, or `/config`. A change applies at once. There is no Save button. Text and number fields apply on Enter or when you leave them, and the row shows **Saved** or the server's error.
 
-Theme and run mode are this browser's choice. Model, region, turns and output tokens are saved **per user** on the server (with history on), so they follow you to another browser and survive a restart.
+A new provider, model or region starts a new chat. The current one stays in Recents.
+
+Theme and run mode stay in this browser. Model, region, turns and output tokens are saved per user on the server when history is on, so they follow you to another browser.
 
 | Setting | Providers | What it does |
 |---------|-----------|--------------|
-| Theme | — | System (follows the OS), Light or Dark. Charts and graphs follow it. |
+| Theme | — | System, Light or Dark. Charts and graphs follow it. |
 | Run queries without asking | — | Same as the mode pill. Needs a tenant. |
-| Provider | when the server offers more than one | e.g. Amazon Bedrock or Ollama on this machine. Switching starts a new chat; each provider keeps the model you last picked. The model picker lists every offered provider's models, grouped, so picking a model there switches provider too. |
-| Turns per question | all | Model calls allowed for one question (1–30, default 10). Each search, name check, query or chart is one. |
-| Max output tokens per turn | all | Caps each model reply, thinking included (256–64,000). Default 16,000 for Claude models, 4,096 otherwise. |
+| Provider | when more than one is offered | Bedrock or Ollama, for example. Each provider keeps the model you last picked. |
+| Turns per question | all | Model calls for one question. 1–30, default 10. A search, name check, query or chart is one call. |
+| Max output tokens per turn | all | Caps one reply, thinking included. 256–64,000. Default 16,000 for Claude, 4,096 otherwise. |
 | AWS region | Bedrock | Where Bedrock is called. The model list follows it. |
-| Model or inference profile | Bedrock | Picked from the account's inference profiles and on-demand models, or typed. Empty: the Claude Sonnet 5 profile for the region. |
-| Model | OpenAI-compatible, vLLM, Azure OpenAI (deployment), Ollama, Anthropic | Filled from the server's model list where it has one. |
+| Model or inference profile | Bedrock | From the account's profiles and on-demand models, or typed. Empty uses the Claude Sonnet 5 profile for the region. |
+| Model | OpenAI-compatible, vLLM, Azure OpenAI, Ollama, Anthropic | Filled from the server's list where it has one. For Azure, this is the deployment name. |
 | Context window (num_ctx) | Ollama | Default 16,384. Below that the agent's prompt is cut. |
 
-Provider URLs and keys are never settable from the browser; they stay in the server's environment. `DQL_CHAT_ALLOW_SETTINGS=0` fixes all settings, and `DQL_CHAT_ALLOWED_MODELS` limits the ids users may pick (comma-separated; a trailing `*` matches a prefix, e.g. `us.anthropic.claude-sonnet-*,amazon.nova-*`). A saved model the server no longer allows is dropped at the next chat.
+The model picker lists every offered provider's models, grouped. Picking a model there switches provider too.
+
+URLs and API keys stay in the server's environment. The browser cannot set them.
+
+- `DQL_CHAT_ALLOW_SETTINGS=0` freezes every setting.
+- `DQL_CHAT_ALLOWED_MODELS` limits the ids users may pick. Comma-separated. A trailing `*` matches a prefix, for example `us.anthropic.claude-sonnet-*,amazon.nova-*`.
+- A saved model the server no longer allows is dropped at the next chat.
 
 ## History
 
-With history on (the default), the server keeps each chat in a SQLite file: every event the page drew (question, queries, results, charts, answer) and the agent's state (the model's messages and up to 20 query results per chat). Reopening a chat redraws it from the events and hands the model its messages, so a follow-up such as "now only prod" works after a restart.
+On by default. Each chat is a SQLite file: what the page drew (question, queries, results, charts, answer) and the agent's state (the model's messages, and up to 20 query results). Reopening a chat redraws it and hands the model those messages, so "now only prod" still works after a restart.
 
-- **Where:** `~/.local/share/dql-chat/chats.db` (or `$XDG_DATA_HOME/dql-chat/`); `DQL_CHAT_DB` or `--history-db` changes it. The file is created readable by its owner only, because it holds query results from your tenant.
-- **Off:** `DQL_CHAT_HISTORY=0` or `--no-history`. Chats then live in memory until the server restarts, as before, and Recents is empty.
-- **Retention:** chats untouched for `DQL_CHAT_RETENTION_DAYS` (default 90) are deleted; `0` keeps them.
-- **Per user:** every row carries the user (`local` with a token, the signed-in identity behind a load balancer). Nobody can list, open, rename or delete another user's chats. With `DQL_CHAT_AUTH=none` everyone is the same user and shares one history.
-- **Not writable?** The server logs `Chat history is off: …` and runs without history rather than failing.
+- **File:** `~/.local/share/dql-chat/chats.db`, or `$XDG_DATA_HOME/dql-chat/`. `DQL_CHAT_DB` or `--history-db` changes it. The file is readable by its owner only. It holds query results from your tenant.
+- **Off:** `DQL_CHAT_HISTORY=0` or `--no-history`. Chats stay in memory until the server restarts, and Recents is empty.
+- **Retention:** chats untouched for `DQL_CHAT_RETENTION_DAYS` (default 90) are deleted. `0` keeps them.
+- **Per user:** every row carries the user. That is `local` with a token, or the signed-in identity behind a load balancer. One user cannot list, open, rename or delete another's chats. With `DQL_CHAT_AUTH=none`, everyone is the same user and shares one history.
+- **Not writable:** the server logs `Chat history is off: …` and runs without history.
 
 ## Model providers
 
@@ -88,21 +131,23 @@ The agent talks to models through adapters in `dqlagent/llm.py`. The terminal ag
 
 The model must support tool use. `./util/dql_agent.sh --check` asks it to call a tool and says if it did not.
 
-**Picking a provider in the chat.** `LLM_PROVIDER` is the server's default. `DQL_CHAT_PROVIDERS` lists the others users may switch to in the page (comma-separated, e.g. `bedrock,ollama`); the default, `auto`, adds a local Ollama when one answers at `OLLAMA_BASE_URL` at start. Each provider still takes its URL and keys from the server's environment. For Ollama the picker shows only models that can call tools (from `/api/show` capabilities); others are listed greyed out, and embedding models are left out. A local model on a shared GPU can take minutes per turn.
+`LLM_PROVIDER` is the server's default. `DQL_CHAT_PROVIDERS` lists the others users may switch to, comma-separated, for example `bedrock,ollama`. The default, `auto`, adds a local Ollama when one answers at `OLLAMA_BASE_URL` at start. URLs and keys still come from the server's environment.
+
+For Ollama, the picker offers models that can call tools (`/api/show` capabilities). Others are greyed out. Embedding models are left out. A local model on a shared GPU can take minutes per turn.
 
 ## Security
 
-- **On your machine (the default, `DQL_CHAT_AUTH=token`)** the server listens on 127.0.0.1 only. The link it prints carries a random token; every API call must send it, and requests must come from the chat's own host and origin. Another website open in the same browser cannot drive the chat or read its answers.
-- The page loads only its own files (a strict Content-Security-Policy; no CDN), and everything from the model or the tenant is inserted as text, never as HTML.
-- The chat holds your Dynatrace token and model credentials server-side; the browser never sees them.
-- **What leaves the machine:** your question, doc excerpts and up to 50 records per query go to the model provider; queries go to your tenant. Nothing else.
-- **What stays on disk:** with history on, the chats and their query results (see History). Theme and run mode are kept in the browser's local storage; the access token only in the tab.
-- **Audit:** each query that runs, and each open-problems check, is printed as one JSON line on stdout (`{"event": "query", "user": ..., "query": ..., "records": ..., "scanned": ...}`). `DQL_CHAT_AUDIT=full` adds the questions; `off` stops it.
+- **On your machine** (`DQL_CHAT_AUTH=token`, the default) the server listens on 127.0.0.1 only. The link it prints carries a random token, and every API call must send it. Requests must come from the chat's own host and origin, so another site open in the same browser cannot drive the chat.
+- The page loads only its own files. Nothing comes from a CDN. Text from the model or the tenant is inserted as text, never as HTML.
+- The Dynatrace token and the model credentials stay on the server. The browser never sees them.
+- **Leaves the machine:** your question, doc excerpts, and up to 50 records per query, sent to the model. Queries go to your tenant.
+- **Stays on disk:** the chats and their query results, when history is on. Theme and run mode stay in the browser. The access token stays in the tab.
+- **Audit:** each query, and each open-problems check, is one JSON line on stdout (`event`, `user`, `query`, `records`, `scanned`). `DQL_CHAT_AUDIT=full` adds the questions. `off` stops it.
 
 ## Server settings
 
-| Variable | Default | |
-|----------|---------|-|
+| Variable | Default | Notes |
+|----------|---------|-------|
 | `DQL_CHAT_HOST` | `127.0.0.1` | `0.0.0.0` in the container |
 | `DQL_CHAT_PORT` | `8750` | |
 | `DQL_CHAT_AUTH` | `token` | `token`, `proxy` (behind a load balancer that signs users in), or `none` (only on a network nobody else can reach) |
@@ -124,7 +169,9 @@ The model must support tool use. `./util/dql_agent.sh --check` asks it to call a
 
 ## Deploy the container on AWS
 
-The chat runs as a container, reads everything from the environment, and gets AWS credentials from the task role, so it deploys like any small web service. The shape that fits: **ECR → ECS on Fargate → an Application Load Balancer that signs users in** (OIDC with your identity provider, or Amazon Cognito). App Runner has no built-in sign-in, so it would need its own front door.
+Skip this if you run the chat on your own machine.
+
+The container reads its configuration from the environment and takes AWS credentials from the task role. A fit for it is **ECR → ECS on Fargate → an Application Load Balancer that signs users in** (OIDC, or Amazon Cognito). App Runner has no built-in sign-in, so it needs something else in front.
 
 ### 1. Build and push the image
 
@@ -139,9 +186,9 @@ docker buildx build --load -f util/dql_chat.Dockerfile -t $REPO:1 .
 docker push $REPO:1
 ```
 
-Build with BuildKit (`docker buildx build`): it reads `util/dql_chat.Dockerfile.dockerignore`. The legacy builder, which plain `docker build` still falls back to on some installs, reads the root `.dockerignore` instead and stops with `COPY failed: ... dt_fetch.py`.
+Use `docker buildx build`. It reads `util/dql_chat.Dockerfile.dockerignore`. Plain `docker build` on some installs still uses the root `.dockerignore` and stops with `COPY failed: ... dt_fetch.py`.
 
-The image is about 120 MB (python:3.12-slim plus text files), runs as `nobody`, and has a health check on `/healthz`. The only thing it writes is chat history, to `/data/chats.db` (a volume).
+The image is about 120 MB. It runs as `nobody` and checks `/healthz`. The only file it writes is `/data/chats.db`.
 
 ### 2. Task definition
 
@@ -172,20 +219,21 @@ The image is about 120 MB (python:3.12-slim plus text files), runs as `nobody`, 
 }
 ```
 
-- **Credentials:** the task role. The agent reads the container credentials endpoint ECS provides and refreshes them before they expire; no keys in the task definition.
-- **Task role policy:** `bedrock:InvokeModel` on the model and its inference profile (the policy in [dql_agent.md](dql_agent.md) §2.2), plus `bedrock:ListInferenceProfiles` and `bedrock:ListFoundationModels` for the default model and the model picker.
-- **The Dynatrace token** comes from Secrets Manager through `secrets`; the execution role needs `secretsmanager:GetSecretValue` on it.
-- **Network:** the tasks need HTTPS out to your tenant and to Bedrock. In a private subnet, use NAT, or a VPC endpoint for `bedrock-runtime` (and `bedrock` for the model list) plus whatever route your tenant needs.
-- **Logs:** the audit lines land in the CloudWatch log group.
-- **History:** Fargate task storage is wiped when the task stops. To keep chats, mount an EFS access point (owner uid 65534) at `/data` through `volumes` and `mountPoints`; to go without, set `DQL_CHAT_HISTORY=0`.
+- **Credentials** come from the task role. The agent reads the container credentials endpoint and refreshes them. The task definition holds no keys.
+- **Task role:** `bedrock:InvokeModel` on the model and its inference profile, as in [dql_agent.md](dql_agent.md) §2.2. Also `bedrock:ListInferenceProfiles` and `bedrock:ListFoundationModels`, for the default model and the picker.
+- **Dynatrace token:** Secrets Manager, through `secrets`. The execution role needs `secretsmanager:GetSecretValue` on that secret.
+- **Network:** the tasks need HTTPS out to your tenant and to Bedrock. From a private subnet, use NAT, or a VPC endpoint for `bedrock-runtime` and for `bedrock` (the model list).
+- **Logs:** audit lines go to the CloudWatch log group.
+- **History:** task storage is wiped when the task stops. To keep chats, mount an EFS access point (owner uid 65534) at `/data`. Otherwise set `DQL_CHAT_HISTORY=0`.
 
 ### 3. Load balancer
 
-- An internal (or internet-facing) ALB with an HTTPS listener whose default action is **authenticate-oidc** (or **authenticate-cognito**), then **forward** to a target group on port 8750. The ALB signs users in and passes `x-amzn-oidc-identity` to the chat, which uses it as the user and refuses requests without it.
-- Target group health check: `GET /healthz`.
-- **Only the ALB may reach the tasks:** their security group allows port 8750 from the ALB's security group only. In `proxy` mode the chat trusts the identity header; the security group is what makes that header trustworthy.
-- Idle timeout: the chat streams answers and sends a heartbeat every 15 seconds, so the default 60 seconds is enough.
-- Run **one task**. With history on EFS a restart loses nothing; open answers and approval prompts live in the task's memory, and SQLite should have one writer, so do not share one history file between several tasks. Without history, a restart starts everyone's chat afresh.
+Use an internal or internet-facing ALB. The HTTPS listener authenticates (**authenticate-oidc** or **authenticate-cognito**), then forwards to a target group on port 8750. The ALB passes `x-amzn-oidc-identity`. The chat uses that as the user and refuses a request that lacks it.
+
+- Health check: `GET /healthz`.
+- The task security group allows port 8750 from the ALB's security group only. In `proxy` mode the chat trusts that header, and the security group is what makes the header trustworthy.
+- Idle timeout can stay at 60 seconds. The chat streams answers and sends a heartbeat every 15 seconds.
+- Run one task. SQLite should have one writer, so one history file is not shared across tasks. Open answers and approval prompts live in the task's memory. With history on EFS, a restart keeps the chats. With history off, a restart starts them fresh.
 
 ## Use it from your own app
 
@@ -211,4 +259,4 @@ def ask():
             "queries": [d["query"] for k, d in events if k == "result"]}
 ```
 
-Keep one `Agent` per user conversation for follow-up questions. For a human approval step, pass `approve="ask"` and an `approver(query) -> (run, said)` callable. Graph specs are already in React Flow's node and edge format with positions, so an existing React front end can render them as they are.
+Keep one `Agent` per conversation, so a follow-up still has the earlier messages. For a human approval step, pass `approve="ask"` and an `approver(query) -> (run, said)` callable. A graph spec is already React Flow nodes and edges, with positions, so a React page can draw it as it arrives.
