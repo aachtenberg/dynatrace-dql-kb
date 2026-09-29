@@ -122,7 +122,7 @@ The model must support tool use. `./util/dql_agent.sh --check` asks it to call a
 | `DQL_CHAT_AUDIT` | `queries` | `queries`, `full` or `off` |
 | `DQL_AGENT_SCAN_LIMIT_GB` | `50` | Grail stops a query that would read more |
 
-## Deploy on AWS
+## Deploy the container on AWS
 
 The chat runs as a container, reads everything from the environment, and gets AWS credentials from the task role, so it deploys like any small web service. The shape that fits: **ECR → ECS on Fargate → an Application Load Balancer that signs users in** (OIDC with your identity provider, or Amazon Cognito). App Runner has no built-in sign-in, so it would need its own front door.
 

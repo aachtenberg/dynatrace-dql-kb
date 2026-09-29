@@ -95,18 +95,18 @@ sequenceDiagram
     autonumber
     participant U as You
     participant G as dql_agent / dql_chat
-    participant B as Model (Bedrock or Ollama)
+    participant B as Model, Bedrock or Ollama
     participant T as Your tenant
 
     U->>G: "any open problems?"
-    G->>B: question + DQL rules (.github/agents/dql-expert.md)
+    G->>B: question + DQL rules, .github/agents/dql-expert.md
     B->>G: search_docs / find_names
     G-->>B: matching docs, real field names
-    B->>G: run_dql "fetch dt.davis.problems, ..."
-    Note over G: local check for known mistakes;<br/>you approve, or say what to change
+    B->>G: run_dql, fetch dt.davis.problems
+    Note over G: local check for known mistakes; you approve, or say what to change
     G->>T: the query
     T-->>G: records, or Grail's error
-    G-->>B: records or error (the model fixes the query and retries)
+    G-->>B: records or the error, and the model fixes the query and retries
     B-->>G: answer from the records + the query
     G-->>U: answer
 ```
@@ -121,7 +121,7 @@ sequenceDiagram
 | `docs/metric_keys.md`, `docs/entity_schemas.md` | From your tenant | Written by `dt_fetch.py` |
 | `dt_fetch.py` | Pulls those two files from the Grail query API | Your tenant |
 | `util/dql_agent.py` | Terminal front end of the agent: keyword search over `docs/`, exact name lookup, and DQL runs through `dt_fetch.py`'s client. Standard library only | The model and your tenant |
-| `util/dql_chat.py` | Browser front end of the same agent, with charts and graphs drawn from query results. Also a container (`util/dql_chat.Dockerfile`) | The model and your tenant |
+| `util/dql_chat.py` | Browser front end of the same agent, with charts and graphs drawn from query results. The container is [`util/dql_chat.Dockerfile`](util/dql_chat.Dockerfile); how to run it is in [Deploy the container on AWS](util/dql_chat.md#deploy-the-container-on-aws) | The model and your tenant |
 | `util/dqlagent/` | The agent itself: `core` (tools and loop), `llm` (Bedrock, OpenAI-compatible, Ollama and Anthropic adapters), `aws` (credentials and SigV4, no boto3), `visuals` (chart and graph specs), `web` (chat server), `store` (chat history and per-user settings in SQLite), `static/` (the page, with React Flow vendored) | — |
 | `util/dt_trace_profiler.py` | Trace profiler. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
 | `util/dt_incident.py` | Entity resolver and incident brief. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
