@@ -156,10 +156,10 @@ def _check_model(provider: str, main: str) -> bool:
             how = "BEDROCK_MODEL_ID" if BEDROCK_MODEL_ID else "default, looked up"
             print(f"         ({how})")
         reply = model.chat("", [{"role": "user", "content": [
-            {"type": "text", "text": "Reply with the word OK."}]}], [], 512)
+            {"type": "text", "text": "Reply with the word OK."}]}], [])
         print(f"         answered: {llm._text(reply['content']).strip()[:40]!r}")
         reply = model.chat("You are testing tool calls.", [{"role": "user", "content": [
-            {"type": "text", "text": "Call the ping tool now."}]}], [PING_TOOL], 1024)
+            {"type": "text", "text": "Call the ping tool now."}]}], [PING_TOOL])
         if any(b.get("type") == "tool_call" and b.get("name") == "ping" for b in reply["content"]):
             print("         tool use: OK")
             return True
@@ -179,7 +179,8 @@ def check() -> int:
     if "Auto-generated" not in (DOCS_DIR / "metric_keys.md").read_text(encoding="utf-8")[:500]:
         print("         metric_keys.md looks like the placeholder; run ./dt_fetch.sh all")
 
-    # Every provider set up in .env, so a failing default does not hide one that works.
+    # Every provider set up in .env, so a failing default does not hide one that
+    # works. The exit code follows the default, the one the agent uses.
     main, *others = llm.configured_providers()
     works = [p for p in [main, *others] if _check_model(p, main)]
     if main not in works:
@@ -207,7 +208,8 @@ def main() -> int:
                     "It writes DQL, runs it, and answers from the result.")
     ap.add_argument("question", nargs="*", help="ask once and exit")
     ap.add_argument("--check", action="store_true",
-                    help="test the model, tool use and the tenant")
+                    help="test the tenant and each model set up in .env "
+                         "(fails only if the default model or the tenant does)")
     ap.add_argument("--models", nargs="?", const="", metavar="FILTER",
                     help="list the models you can use, optionally only those matching FILTER")
     ap.add_argument("--yes", "-y", action="store_true",

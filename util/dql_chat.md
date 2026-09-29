@@ -12,7 +12,7 @@ cp .env.example .env          # your tenant, and one model: Bedrock, Azure or Ol
 ./util/dql_chat.sh            # opens the chat
 ```
 
-History is a SQLite file the chat creates. A local Ollama is offered when one is running. If the default model is not enabled in your AWS account, the chat says so and lets you pick another.
+History is a SQLite file the chat creates. The model picker offers every provider set up in `.env`, and a local Ollama when one is running. If the default model is not enabled in your AWS account, the chat says so and lets you pick another.
 
 ```bash
 ./util/dql_chat.sh --no-browser             # print the link
@@ -91,7 +91,7 @@ Theme and run mode stay in this browser. Model, region, turns and output tokens 
 | Run queries without asking | — | Same as the mode pill. Needs a tenant. |
 | Provider | when more than one is offered | Bedrock or Ollama, for example. Each provider keeps the model you last picked. |
 | Turns per question | all | Model calls for one question. 1–30, default 10. A search, name check, query or chart is one call. |
-| Max output tokens per turn | all | Caps one reply, thinking included. 256–64,000. Default 16,000 for Claude, 4,096 otherwise. |
+| Max output tokens per turn | all | Caps one reply, thinking included. 256–64,000. Default 16,000 for Claude and the Responses API, 4,096 otherwise. |
 | AWS region | Bedrock | Where Bedrock is called. The model list follows it. |
 | Model or inference profile | Bedrock | From the account's profiles and on-demand models, or typed. Empty uses the Claude Sonnet 5 profile for the region. |
 | Model | OpenAI-compatible, vLLM, Azure OpenAI, Ollama, Anthropic | Filled from the server's list where it has one. For Azure, this is the deployment name. |
@@ -187,7 +187,8 @@ Leave out `LLM_PROVIDER` to keep Bedrock as the default. The chat's picker offer
 **4. Check it.** Run `./util/dql_agent.sh --check`.
 
 Good to know:
-- **Model field:** the picker has no list for Azure. Type the deployment name, not the model name.
+- **Model field:** the picker offers `AZURE_OPENAI_DEPLOYMENT`. For another deployment, type its name, not the model name.
+- **Older deployments:** a model without reasoning is retried without encrypted reasoning, on its own. A resource without the v1 API needs `OPENAI_API=chat`.
 - **Portal instead of the CLI:** in [ai.azure.com](https://ai.azure.com), go to **Models + endpoints**, then **Deploy model**. The key and endpoint are on the resource's overview page.
 - **Keys:** only API keys work. A resource with local auth turned off (Entra ID only) is refused with HTTP 401 or 403.
 - **Budget:** set one in the portal under **Cost Management**, then **Budgets**, scoped to the resource group.
@@ -197,7 +198,7 @@ Good to know:
 - **On your machine** (`DQL_CHAT_AUTH=token`, the default) the server listens on 127.0.0.1 only. The link it prints carries a random token, and every API call must send it. Requests must come from the chat's own host and origin, so another site open in the same browser cannot drive the chat.
 - The page loads only its own files. Nothing comes from a CDN. Text from the model or the tenant is inserted as text, never as HTML.
 - The Dynatrace token and the model credentials stay on the server. The browser never sees them.
-- **Leaves the machine:** your question, doc excerpts, and up to 50 records per query, sent to the model. Queries go to your tenant.
+- **Leaves the machine:** your question, doc excerpts, and up to 50 records per query, sent to the model the user picks. Any provider with a key in `.env` can be picked, so remove keys you do not want used, or set `DQL_CHAT_PROVIDERS` to a fixed list. Queries go to your tenant.
 - **Stays on disk:** the chats and their query results, when history is on. Theme and run mode stay in the browser. The access token stays in the tab.
 - **Audit:** each query, and each open-problems check, is one JSON line on stdout (`event`, `user`, `query`, `records`, `scanned`). `DQL_CHAT_AUDIT=full` adds the questions. `off` stops it.
 
@@ -213,7 +214,7 @@ Good to know:
 | `DQL_CHAT_AUTO_RUN` | `0` | `1` starts a browser in "Run automatically" until its user picks a mode |
 | `DQL_CHAT_ALLOW_SETTINGS` | `1` | `0` fixes the settings |
 | `DQL_CHAT_ALLOWED_MODELS` | any | See Settings |
-| `DQL_CHAT_PROVIDERS` | `auto` | Providers users may pick besides `LLM_PROVIDER`, e.g. `bedrock,ollama`; `auto` adds a local Ollama if it answers |
+| `DQL_CHAT_PROVIDERS` | `auto` | Providers users may pick besides `LLM_PROVIDER`, e.g. `bedrock,ollama`; `auto` adds every provider set up in `.env`, and an Ollama that answers |
 | `DQL_CHAT_HISTORY` | `1` | `0` keeps chats in memory only (`--no-history`) |
 | `DQL_CHAT_DB` | `~/.local/share/dql-chat/chats.db` | The history file (`--history-db`); `/data/chats.db` in the container |
 | `DQL_CHAT_RETENTION_DAYS` | `90` | Chats untouched this long are deleted; `0` keeps them |

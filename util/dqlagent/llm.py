@@ -7,11 +7,11 @@ Neutral format
     message  {"role": "user" | "assistant", "content": [block, ...]}
     block    {"type": "text", "text": str}
              {"type": "tool_call", "id": str, "name": str, "input": dict}
-                 (the Responses API adds "item_id", sent back with the call)
              {"type": "tool_result", "id": str, "name": str, "text": str, "is_error": bool}
              {"type": "raw", "provider": str, "data": ...}
                  provider-only content (reasoning or thinking blocks) that must
-                 be sent back unchanged on the next call
+                 be sent back unchanged on the next call. For the Responses API
+                 it is {"output": [item, ...]}: the whole reply, replayed as is
     tool     {"name": str, "description": str, "schema": JSON schema}
     reply    {"content": [block, ...], "stop": "end" | "tool_use" | "max_tokens" | "refusal"}
 
@@ -484,29 +484,27 @@ class OpenAICompatModel(ChatModel):
 
     def _responses(self, system, messages, tools, max_tokens):
         """POST /responses. Like Converse, the conversation is a list of typed
-        items, and reasoning items go back unchanged. store=false keeps nothing
-        on the provider's side; reasoning comes back encrypted instead."""
+        items. store=false keeps nothing on the provider's side, so each reply's
+        output items (encrypted reasoning, messages, calls) go back verbatim."""
         items = []
         for m in messages:
-            blocks = m["content"]
-            calls = any(b.get("type") == "tool_call" for b in blocks)
-            for b in blocks:
+            replay = next((b["data"]["output"] for b in m["content"] if b.get("type") == "raw"
+                           and b.get("provider") == self.provider
+                           and isinstance(b.get("data"), dict) and "output" in b["data"]), None)
+            if replay is not None:
+                items.extend(replay)
+                continue
+            for b in m["content"]:
                 t = b.get("type")
                 if t == "text" and b.get("text"):
                     items.append({"role": m["role"], "content": b["text"]})
                 elif t == "tool_call":
-                    item = {"type": "function_call", "call_id": b["id"], "name": b["name"],
-                            "arguments": json.dumps(b.get("input") or {})}
-                    if b.get("item_id"):
-                        item["id"] = b["item_id"]
-                    items.append(item)
+                    items.append({"type": "function_call", "call_id": b["id"], "name": b["name"],
+                                  "arguments": json.dumps(b.get("input") or {})})
                 elif t == "tool_result":
                     text = b.get("text") or "(empty)"
                     items.append({"type": "function_call_output", "call_id": b["id"],
                                   "output": ("ERROR: " + text) if b.get("is_error") else text})
-                elif t == "raw" and b.get("provider") == self.provider and calls:
-                    # Reasoning only matters until the tool calls it led to are answered.
-                    items.append(b["data"])
         body = {"model": self.settings["model"], "input": items, "store": False,
                 "max_output_tokens": max_tokens or self.default_max_tokens}
         if system:
@@ -514,11 +512,22 @@ class OpenAICompatModel(ChatModel):
         if tools:
             body["tools"] = [{"type": "function", "name": t["name"], "description": t["description"],
                               "parameters": t["schema"]} for t in tools]
-        if self.preset in ("openai", "azure_openai"):
+        if self.preset in ("openai", "azure_openai") and not getattr(self, "_no_encrypted", False):
             body["include"] = ["reasoning.encrypted_content"]
-        data = _http_json(self._url("/responses"), body, self._headers(), self.label)
+        try:
+            data = _http_json(self._url("/responses"), body, self._headers(), self.label)
+        except ModelError as e:
+            if "include" not in body or "encrypted" not in str(e).lower():
+                raise
+            self._no_encrypted = True       # a model without reasoning
+            body.pop("include")
+            data = _http_json(self._url("/responses"), body, self._headers(), self.label)
+        if data.get("status") == "failed" or data.get("error"):
+            err = data.get("error") or {}
+            raise ModelError(f"{self.label}: {err.get('message') or err.get('code') or 'the response failed'}.")
+        output = data.get("output") or []
         content, refused = [], False
-        for item in data.get("output") or []:
+        for item in output:
             t = item.get("type")
             if t == "message":
                 for c in item.get("content") or []:
@@ -534,10 +543,10 @@ class OpenAICompatModel(ChatModel):
                 except ValueError:
                     parsed = {"_invalid_arguments": str(args)[:500]}
                 content.append({"type": "tool_call", "id": item.get("call_id") or item.get("id", ""),
-                                "item_id": item.get("id", ""), "name": item.get("name", ""),
+                                "name": item.get("name", ""),
                                 "input": parsed if isinstance(parsed, dict) else {"value": parsed}})
-            elif t == "reasoning":
-                content.append({"type": "raw", "provider": self.provider, "data": item})
+        if output:
+            content.append({"type": "raw", "provider": self.provider, "data": {"output": output}})
         reason = (data.get("incomplete_details") or {}).get("reason", "")
         if refused or reason == "content_filter":
             stop = "refusal"
