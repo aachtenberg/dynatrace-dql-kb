@@ -1,6 +1,6 @@
-# Architecture and how-to
+# Architecture
 
-How the pieces fit, and how to run each one. The short version is the [README](README.md).
+How the pieces fit together. To install and run them, start with the [README](README.md); each tool in `util/` has its own guide.
 
 ---
 
@@ -88,14 +88,14 @@ sequenceDiagram
     end
 ```
 
-### What a question to the DQL agent does
+### What a question to the chat does
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as You
-    participant G as dql_agent.py
-    participant B as Bedrock model
+    participant G as dql_agent / dql_chat
+    participant B as Model (Bedrock or Ollama)
     participant T as Your tenant
 
     U->>G: "any open problems?"
@@ -133,118 +133,48 @@ sequenceDiagram
 
 ---
 
-## How-to
+## The DQL agent
 
-### Prerequisites
+`util/dqlagent/` is one agent with two front ends: `dql_agent.py` in the terminal and `dql_chat.py` in the browser.
 
-- Python 3.10 or newer, already installed. No admin rights and no `pip install` for the Dynatrace tools. `./quickstart.sh` finds it, including on Windows Git Bash where `python3` is the Microsoft Store alias.
-- A Dynatrace platform URL and token, only if you want to refresh the env-specific docs or run the trace profiler.
-- Docker, or permission to download from PyPI and Hugging Face, only for the MCP server and the RAG CLI.
+- **Loop.** Each question is a loop of model calls (at most 10). The model calls `search_docs` (keyword search over `docs/`), `find_names` (exact lookup in the tenant's metric keys and fields) and `run_dql` until it can answer. Every call carries `.github/agents/dql-expert.md` as its DQL rules.
+- **Guards.** `run_dql` rejects the known mistakes (SQL keywords, `fetch` on a metric, `by:` without braces) before Grail sees them. It asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query.
+- **Models.** Adapters in `llm.py` cover Bedrock (Converse API, signed with SigV4 in `aws.py`, no `boto3`), Ollama (native `/api/chat`, streamed), OpenAI-compatible servers and the Anthropic API.
+- **Charts and graphs.** The browser adds `show_timeseries`, `show_bar` and `show_graph`. They take the `result_id` of a query the model ran plus field names. `visuals.py` builds the chart or graph from that result's records, and the page draws it with SVG or React Flow, so the model never supplies the numbers.
+- **History.** `store.py` keeps each chat in SQLite, scoped to its user: the events the page drew (to redraw it) and the agent's messages and query results (so the model carries on after a restart).
+- **Stop.** An answer runs on its own thread, so Stop ends it at once. A stopped answer is set aside and cannot reach the page or the history.
 
-### 1. Refresh metric keys and field names
+Setup and daily use: [util/dql_agent.md](util/dql_agent.md) and [util/dql_chat.md](util/dql_chat.md).
 
-```bash
-cp .env.example .env          # fill in DT_ENVIRONMENT_URL and DT_API_TOKEN
-./dt_fetch.sh test            # verify auth + connectivity (one tiny query)
-./dt_fetch.sh all             # write metric_keys.md + entity_schemas.md
-```
+## Copilot
 
-Token auth scheme is auto-detected: classic API tokens (`dt0c01…`) use
-`Api-Token`, platform tokens (`dt0s16…`) use `Bearer`. Required Grail read
-scopes are listed in [`.env.example`](.env.example). `.env` is gitignored.
+Copilot reads these files as context; there is no build step.
 
-> Skip this step to use the committed sample data as-is — but the metric keys and
-> field names will reflect the tenant they were generated from, not yours.
+| File | When it applies |
+|------|-----------------|
+| `.github/copilot-instructions.md` | Every Copilot request |
+| `.github/instructions/dql.instructions.md` | Editing `.dql` or `.md` files |
+| `.github/instructions/dashboard.instructions.md` | Editing dashboard JSON |
+| `.github/agents/dql-expert.md`, `dashboard-builder.md` | `@dql-expert`, `@dashboard-builder` in Chat; the DQL agent uses `dql-expert.md` too |
 
-### 2. Integrate with an agent (MCP, recommended)
+In Agent Mode, Copilot can also search `docs/`.
 
-```bash
-docker build -t dql-kb-mcp .
-docker run --rm -i dql-kb-mcp        # retrieval only, zero config
-```
+## Retrieval and generation
 
-Register it with your MCP client (Claude Code/Desktop, Cursor, …):
+The MCP server and `dql_rag.py` search a local vector store built from `docs/` by `dql_rag.py ingest`. `ingest` skips chunks whose text has not changed, so re-running it is cheap. `dql_generate` and `dql_rag.py query` also call a model when `LLM_PROVIDER` is set (examples in [.env.example](.env.example)):
 
-```jsonc
-{
-  "mcpServers": {
-    "dql-kb": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "dql-kb-mcp"]
-    }
-  }
-}
-```
+- **Bedrock** uses the standard AWS credential chain; pass `AWS_*` into the container with `-e`. `BEDROCK_MODEL_ID` is usually a cross-region inference profile (`us.` or `eu.`), not the bare model id.
+- **Ollama** is called on its native `/api/chat`, because its `/v1` route ignores `num_ctx` and silently drops the retrieved pages. From Docker on Linux, add `--add-host=host.docker.internal:host-gateway`. Which tag to run is in [evaluations/ollama-dql.md](evaluations/ollama-dql.md).
+- **vLLM and other OpenAI-compatible servers** take a base URL with or without `/v1`. Set `PRIVATE_API_KEY` only if the server checks a bearer token.
 
-With no provider set, the server offers `dql_search` only. The IDE model, following `@dql-expert` or `@dashboard-builder`, writes the DQL. To turn on `dql_generate`, point it at Bedrock's Converse API or at a private server (`ollama`, `vllm`, or `openai_compatible`). Ollama is called on native `/api/chat` with `OLLAMA_NUM_CTX` (default 16384); vLLM and `openai_compatible` use `/v1/chat/completions`. The 2026-09-24 model comparison and the test plan are in [evaluations/ollama-dql.md](evaluations/ollama-dql.md). Bedrock looks like this:
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local sentence-transformer, baked into the image |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `100` | Tokens |
+| `TOP_K` | `10` | Chunks retrieved per question |
+| `OLLAMA_MODEL` / `OLLAMA_NUM_CTX` | `qwen3:8b` / `16384` | Ollama's default context of 4096 truncates the prompt |
 
-```bash
-docker run --rm -i \
-  -e LLM_PROVIDER=bedrock \
-  -e BEDROCK_REGION=us-east-1 \
-  -e BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
-  -e AWS_REGION=us-east-1 \
-  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-  dql-kb-mcp
-```
-
-### 3. Use the RAG CLI directly
-
-```bash
-pip install -r requirements.txt       # or: uv pip install -r requirements.txt
-python dql_rag.py ingest
-python dql_rag.py query "Show me error logs from the payment service"
-python dql_rag.py interactive
-```
-
-### 4. Profile trace entry points (utility)
-
-`util/` holds tools that talk to a tenant but are not part of the knowledge base. The trace profiler reuses `dt_fetch.py`'s client and the same `.env`.
-
-```bash
-./util/dt_trace_profiler.sh --days 1 --shape-top 5   # cheap first run
-./util/dt_trace_profiler.sh --help
-```
-
-The CSV it writes contains real service and endpoint names and is gitignored. See [util/dt_trace_profiler.md](util/dt_trace_profiler.md) for stages, scoring, and caveats.
-
-### 4b. Incident brief (utility)
-
-```bash
-./util/dt_incident.sh resolve "payments-api"
-./util/dt_incident.sh brief "payments-api"
-```
-
-`resolve` lists matching entities. `brief` writes a markdown note for one of them: Davis problems, a baseline, error logs, events just before the window, and service callers. The note contains real names. See [util/dt_incident.md](util/dt_incident.md).
-
-### 5. Ask your tenant through Bedrock
-
-```bash
-./util/dql_agent.sh --check
-./util/dql_agent.sh
-```
-
-No install. Each question is a loop of model calls (Bedrock Converse by default; `LLM_PROVIDER` picks another adapter in `util/dqlagent/llm.py`): the model calls `search_docs`, `find_names` and `run_dql` until it can answer, at most 10 rounds. Every call carries `.github/agents/dql-expert.md` as its DQL rules. `run_dql` rejects known mistakes (SQL keywords, `fetch` on a metric, `by:` without braces) before Grail sees them, asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query. Setup, recipes and troubleshooting are in [util/dql_agent.md](util/dql_agent.md).
-
-The browser chat (`./util/dql_chat.sh`) runs the same loop and adds three tools, `show_timeseries`, `show_bar` and `show_graph`. They take the `result_id` of a query the model ran plus field names; the server builds the chart or graph from that result's records and streams the spec to the page, which draws it with SVG or React Flow. The model never supplies the numbers. With history on, `store.py` keeps each chat in SQLite, scoped to its user: the events the page drew (to redraw it) and the agent's messages and query results (so the model can carry on after a restart). Streaming, the query approval round trip, settings, history and deployment are in [util/dql_chat.md](util/dql_chat.md).
-
-### 6. Use the Copilot agents
-
-Open the repo in VS Code with Copilot enabled and use `@dql-expert` or
-`@dashboard-builder` in Copilot Chat. No build step — Copilot reads `.github/`
-and `docs/` as context. See the [README](README.md#github-copilot-agents).
-
-### Refreshing the knowledge base
-
-Metric keys and entity fields drift as a tenant changes. To refresh:
-
-```bash
-python dt_fetch.py all                # re-pull env docs (re-stamps the date)
-python dql_rag.py ingest              # re-embed (CLI path)
-docker build -t dql-kb-mcp .          # rebuild the image (MCP path)
-```
-
-`ingest` skips chunks whose text did not change, so re-running it is safe.
+Without Docker, `./quickstart.sh --with-rag` creates `.venv` with the CPU build of PyTorch (a plain `pip install` pulls the multi-gigabyte CUDA build). On Debian or Ubuntu it needs `python3-venv`. With `uv`, run `uv venv && uv pip install -r requirements.txt && uv run python dql_rag.py ingest`.
 
 ---
 
@@ -272,3 +202,5 @@ way.
 > once something is being monitored. Entity/log/span **schemas** still populate
 > fully — `dt_fetch.py` uses `describe`, which returns the field list even with
 > no data present.
+
+To refresh everything after the tenant changes: `./dt_fetch.sh all`, then `python dql_rag.py ingest` (CLI) or `docker build -t dql-kb-mcp .` (MCP).

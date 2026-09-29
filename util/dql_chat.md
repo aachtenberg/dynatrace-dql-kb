@@ -1,12 +1,8 @@
 # DQL chat
 
-The DQL agent as a chat in your browser. You ask in plain language ("any open problems?", "chart CPU for the busiest hosts", "who calls checkout?"); the model searches this repo's DQL reference, checks every metric and field name against your tenant, runs the query and answers from the records: a one- or two-line summary, then **Worth a look** (up to three things in the records you would want to know without asking: an outlier, errors, one host carrying the load, a result that was cut off), then details and the query. When a picture helps, it draws a line chart, a bar chart or a React Flow graph **from the query's records**. The model names a result and its fields; it never types the numbers.
+The DQL agent as a chat in your browser. Ask in plain language ("any open problems?", "who calls checkout?"). The model checks names against your tenant, runs the query, and answers from the records: a short summary, then **Worth a look** (an outlier, errors, one host carrying the load, a result that was cut off), then the query. When a picture helps, it draws a chart or a React Flow graph **from the query's records**, never from numbers it typed. Chats are kept so you can reopen them and carry on.
 
-Chats are kept (SQLite, standard library) so you can reopen them from **Recents**, and the model picks up where it left off. The page follows the patterns of Claude Code and Copilot Chat: a message box with the tools inside it, `/` commands, numbered approval prompts, a model picker, and settings that apply as you change them.
-
-It is the same agent as `./util/dql_agent.sh`, with the same setup, model providers and safety checks. [dql_agent.md](dql_agent.md) covers the setup (Dynatrace token, AWS access, `--check`) and troubleshooting.
-
-Standard library only. The page's graph library (React Flow) is vendored in `dqlagent/static/vendor/`, so nothing is installed and nothing loads from a CDN.
+It is the same agent as `./util/dql_agent.sh`; [dql_agent.md](dql_agent.md) covers the Dynatrace token, AWS access and troubleshooting. It uses the standard library only, and React Flow is vendored, so nothing is installed and nothing loads from a CDN.
 
 ## Quick start
 
@@ -29,7 +25,8 @@ That is all. Nothing to install and no database to set up: history goes to a SQL
 - **The message box** holds everything: type and press Enter (Shift+Enter for a new line). The round **↑** button sends; while an answer runs it becomes **■ Stop**, and Esc does the same. The pill on the left is the run mode, the one on the right the model.
 - **Each query asks first.** Its card shows **Run this query?** with three options, by click or key: **1** Yes, **2** Yes, and don't ask again (switches the mode to Run automatically), **3** No, and tell the model what to do differently ("last 24h instead", "only prod hosts"). Esc declines. The mode pill (**Ask before running** / **Run automatically**) switches it back. Every query is still checked for the usual DQL mistakes before it runs.
 - **Records** of every query are one click away under its card: up to 200 rows.
-- **Charts and graphs** carry a **Table** toggle and the query they were drawn from. Line charts show every series at the pointer; arrow keys move the readout. Graphs pan, zoom and drag; node colour is the Smartscape type (host, process, service, …), and a ring marks what the model highlighted, usually the entities under **Worth a look**.
+- **Charts and graphs** carry a **Table** toggle and the query they were drawn from; the **⤢** button blows one up to fill the window (Esc restores). Line charts show every series at the pointer; arrow keys move the readout. Graphs pan, zoom and drag; node colour is the Smartscape type (host, process, service, …), and a ring marks what the model highlighted, usually the entities under **Worth a look**.
+- **Open problems** show on the welcome screen and as a badge in the top bar: the count, the categories and the newest ones. A click asks the agent about them. This is one fixed read-only query the server runs (cached a minute), not the model's; `DQL_CHAT_PROBLEMS=0` turns it off.
 - **Recents** (the sidebar) lists your chats, newest first, titled by their first question. Click one to reopen it exactly as it looked, graphs included, and keep asking: the model has its earlier messages and query results. The **⋯** menu renames or deletes a chat. **New chat** starts another; the current one stays in Recents. A reload reopens the chat you were in.
 
 ### Commands
@@ -41,12 +38,13 @@ Type `/` in the message box for the list; arrows pick, Tab completes, Enter runs
 | `/clear` | Start a new chat (the current one stays in Recents) |
 | `/resume` | Open Recents to reopen a past chat |
 | `/model` | Open the model picker |
+| `/problems` | Ask about the open Davis problems |
 | `/config` | Open settings |
 | `/theme [system\|light\|dark]` | Switch the theme; without a word, open it in settings |
 
 ## Settings
 
-The **settings** button (top right, or `/config`) opens a dialog. **Every change applies at once**; there is no Save button. Text and number fields apply on Enter or when you leave them, and show **Saved** or the server's error on their row. A new model or region starts a new chat; the current one stays in Recents.
+The **settings** button (top right, or `/config`) opens a dialog. **Every change applies at once**; there is no Save button. Text and number fields apply on Enter or when you leave them, and show **Saved** or the server's error on their row. A new provider, model or region starts a new chat; the current one stays in Recents.
 
 Theme and run mode are this browser's choice. Model, region, turns and output tokens are saved **per user** on the server (with history on), so they follow you to another browser and survive a restart.
 
@@ -99,7 +97,7 @@ The model must support tool use. `./util/dql_agent.sh --check` asks it to call a
 - The chat holds your Dynatrace token and model credentials server-side; the browser never sees them.
 - **What leaves the machine:** your question, doc excerpts and up to 50 records per query go to the model provider; queries go to your tenant. Nothing else.
 - **What stays on disk:** with history on, the chats and their query results (see History). Theme and run mode are kept in the browser's local storage; the access token only in the tab.
-- **Audit:** each query that runs is printed as one JSON line on stdout (`{"event": "query", "user": ..., "query": ..., "records": ..., "scanned": ...}`). `DQL_CHAT_AUDIT=full` adds the questions; `off` stops it.
+- **Audit:** each query that runs, and each open-problems check, is printed as one JSON line on stdout (`{"event": "query", "user": ..., "query": ..., "records": ..., "scanned": ...}`). `DQL_CHAT_AUDIT=full` adds the questions; `off` stops it.
 
 ## Server settings
 
@@ -120,6 +118,7 @@ The model must support tool use. `./util/dql_agent.sh --check` asks it to call a
 | `DQL_CHAT_MAX_SESSIONS` | `50` | Open conversations kept in memory (with history on, an evicted one reloads from disk) |
 | `DQL_CHAT_IDLE_MINUTES` | `240` | A conversation idle this long leaves memory (with history on, it reloads from disk when reopened) |
 | `DQL_CHAT_APPROVAL_TIMEOUT` | `600` | Seconds a query waits for Run before it counts as declined |
+| `DQL_CHAT_PROBLEMS` | `1` | `0` drops the open-problems check from the welcome screen |
 | `DQL_CHAT_AUDIT` | `queries` | `queries`, `full` or `off` |
 | `DQL_AGENT_SCAN_LIMIT_GB` | `50` | Grail stops a query that would read more |
 

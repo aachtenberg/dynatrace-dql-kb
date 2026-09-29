@@ -444,7 +444,8 @@ def open_problems(top: int = 5) -> dict:
 
 
 def run_dql_tool(query: str) -> tuple[dict, bool]:
-    """Returns (result for the model, ok). Kept for callers of the old helper."""
+    """Returns (result for the model, ok): one query outside a conversation
+    (dql_agent.py --check uses it to prove the tenant answers)."""
     result, error = _query_grail(query)
     if result is None:
         return {"error": error}, False
