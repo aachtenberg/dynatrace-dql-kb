@@ -242,4 +242,5 @@ PRIVATE_MODEL=your-model-name
 
 - **Browser chat** — `./util/dql_chat.sh`, above. Container: `util/dql_chat.Dockerfile`.
 - **Trace profiler** — `./util/dt_trace_profiler.sh` ranks trace entry points and flags the ones that look like batch jobs. Standard library only. See [util/dt_trace_profiler.md](util/dt_trace_profiler.md).
+- **Incident brief** — `./util/dt_incident.sh` resolves a name or a Davis problem id to an entity and writes a markdown note: problems, a baseline, error logs, the change window, and service callers. Standard library only. See [util/dt_incident.md](util/dt_incident.md).
 - **Evaluations** — [evaluations/](evaluations/) holds model test results. It stays out of `docs/` so they are not ingested as DQL reference.

@@ -8,7 +8,7 @@ How the pieces fit, and how to run each one. The short version is the [README](R
 
 The repo keeps correct DQL in `docs/` and hands the relevant pages to whatever model is writing the query.
 
-Copilot and the DQL agent read the files directly. Search and generation in `dql_rag.py` and the MCP server go through a local vector store. Three things talk to Dynatrace: the metric-key refresh, the trace profiler, and the DQL agent, which runs the queries it writes.
+Copilot and the DQL agent read the files directly. Search and generation in `dql_rag.py` and the MCP server go through a local vector store. These talk to Dynatrace: the metric-key refresh, the trace profiler, the incident brief, and the DQL agent, which runs the queries it writes.
 
 ```mermaid
 flowchart TB
@@ -124,6 +124,7 @@ sequenceDiagram
 | `util/dql_chat.py` | Browser front end of the same agent, with charts and graphs drawn from query results. Also a container (`util/dql_chat.Dockerfile`) | The model and your tenant |
 | `util/dqlagent/` | The agent itself: `core` (tools and loop), `llm` (Bedrock, OpenAI-compatible, Ollama and Anthropic adapters), `aws` (credentials and SigV4, no boto3), `visuals` (chart and graph specs), `web` (chat server), `store` (chat history and per-user settings in SQLite), `static/` (the page, with React Flow vendored) | — |
 | `util/dt_trace_profiler.py` | Trace profiler. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
+| `util/dt_incident.py` | Entity resolver and incident brief. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
 | `dql_rag.py` | Index, search, and an optional model call | The model call only |
 | `mcp_server.py` | Same search and generation, as MCP tools | Generation only |
 | `Dockerfile` | Builds the MCP image and indexes `docs/` at build time | At build only |
@@ -206,6 +207,15 @@ python dql_rag.py interactive
 ```
 
 The CSV it writes contains real service and endpoint names and is gitignored. See [util/dt_trace_profiler.md](util/dt_trace_profiler.md) for stages, scoring, and caveats.
+
+### 4b. Incident brief (utility)
+
+```bash
+./util/dt_incident.sh resolve "payments-api"
+./util/dt_incident.sh brief "payments-api"
+```
+
+`resolve` lists matching entities. `brief` writes a markdown note for one of them: Davis problems, a baseline, error logs, events just before the window, and service callers. The note contains real names. See [util/dt_incident.md](util/dt_incident.md).
 
 ### 5. Ask your tenant through Bedrock
 
