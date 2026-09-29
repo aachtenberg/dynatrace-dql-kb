@@ -79,22 +79,41 @@ def _dumps(obj) -> str:
     return json.dumps(obj, default=str, ensure_ascii=False, separators=(",", ":"))
 
 
+def _owner_only(path: str):
+    """The database, its WAL files and their folder readable by the owner only:
+    they hold query results from the tenant. SQLite gives the -wal and -shm
+    files the database file's mode when it creates them, so the database file
+    is made 0600 before the first connect; files an earlier version left more
+    open are tightened too."""
+    folder = Path(path).parent
+    if not folder.exists():
+        folder.mkdir(parents=True, mode=0o700)
+    os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
+    for p in (path, path + "-wal", path + "-shm"):
+        try:
+            os.chmod(p, 0o600)
+        except FileNotFoundError:
+            pass
+
+
 class Store:
+    """One SQLite connection shared by the server's threads. Every statement,
+    read or write, runs under the lock: sqlite3 does not serialize a shared
+    connection by itself (a read during another thread's write transaction
+    fails or sees half of it)."""
+
     def __init__(self, path: str, retention_days: int = 90):
         self.path = path
         self.retention_days = retention_days
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()           # prune() runs inside conversations()
         if path != ":memory:":
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            _owner_only(path)
         self.db = sqlite3.connect(path, check_same_thread=False, timeout=10)
         self.db.row_factory = sqlite3.Row
-        if path != ":memory:":
-            self.db.execute("PRAGMA journal_mode=WAL")
-            try:
-                os.chmod(path, 0o600)     # query results are tenant data
-            except OSError:
-                pass
-        self.db.executescript(SCHEMA)
+        with self.lock:
+            if path != ":memory:":
+                self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.executescript(SCHEMA)
         self._pruned = 0.0
         self.prune()
 
@@ -102,22 +121,25 @@ class Store:
         with self.lock:
             self.db.close()
 
+    def _rows(self, sql: str, params: tuple) -> list:
+        with self.lock:
+            return self.db.execute(sql, params).fetchall()
+
     # -- conversations -----------------------------------------------------
     def conversations(self, user: str, limit: int = 200) -> list[dict]:
         self.prune()
-        rows = self.db.execute(
+        return [dict(r) for r in self._rows(
             "SELECT id, title, created, updated, turns FROM conversations "
-            "WHERE user = ? AND turns > 0 ORDER BY updated DESC LIMIT ?", (user, limit))
-        return [dict(r) for r in rows]
+            "WHERE user = ? AND turns > 0 ORDER BY updated DESC LIMIT ?", (user, limit))]
 
     def get(self, user: str, conv: str) -> dict | None:
-        row = self.db.execute("SELECT id, title, created, updated, turns FROM conversations "
-                              "WHERE user = ? AND id = ?", (user, conv)).fetchone()
-        return dict(row) if row else None
+        rows = self._rows("SELECT id, title, created, updated, turns FROM conversations "
+                          "WHERE user = ? AND id = ?", (user, conv))
+        return dict(rows[0]) if rows else None
 
     def events(self, user: str, conv: str) -> list[dict]:
-        rows = self.db.execute("SELECT turn, kind, data FROM events WHERE user = ? AND conv = ? "
-                               "ORDER BY seq", (user, conv))
+        rows = self._rows("SELECT turn, kind, data FROM events WHERE user = ? AND conv = ? "
+                          "ORDER BY seq", (user, conv))
         return [{"turn": r["turn"], "kind": r["kind"], "data": json.loads(r["data"])} for r in rows]
 
     def begin_turn(self, user: str, conv: str, question: str) -> int:
@@ -190,21 +212,22 @@ class Store:
                                 (user, conv, rid))
 
     def load_state(self, user: str, conv: str) -> dict | None:
-        row = self.db.execute("SELECT state FROM conversations WHERE user = ? AND id = ?",
-                              (user, conv)).fetchone()
-        if row is None:
-            return None
+        with self.lock:                          # the state and its results, read together
+            row = self.db.execute("SELECT state FROM conversations WHERE user = ? AND id = ?",
+                                  (user, conv)).fetchone()
+            if row is None:
+                return None
+            results = self.db.execute("SELECT rid, query, records FROM results "
+                                      "WHERE user = ? AND conv = ? ORDER BY pos", (user, conv)).fetchall()
         state = json.loads(row["state"] or "{}")
         state["results"] = [(r["rid"], {"query": r["query"], "records": json.loads(r["records"])})
-                            for r in self.db.execute(
-                                "SELECT rid, query, records FROM results WHERE user = ? AND conv = ? "
-                                "ORDER BY pos", (user, conv))]
+                            for r in results]
         return state
 
     # -- per-user settings -------------------------------------------------
     def prefs(self, user: str) -> dict:
-        row = self.db.execute("SELECT data FROM prefs WHERE user = ?", (user,)).fetchone()
-        return json.loads(row["data"]) if row else {}
+        rows = self._rows("SELECT data FROM prefs WHERE user = ?", (user,))
+        return json.loads(rows[0]["data"]) if rows else {}
 
     def save_prefs(self, user: str, data: dict):
         with self.lock, self.db:
@@ -215,11 +238,11 @@ class Store:
     # -- retention ---------------------------------------------------------
     def prune(self):
         """Delete conversations untouched for retention_days; at most once an hour."""
-        if self.retention_days <= 0 or time.time() - self._pruned < 3600:
-            return
-        self._pruned = time.time()
-        cutoff = time.time() - self.retention_days * 86400
         with self.lock, self.db:
+            if self.retention_days <= 0 or time.time() - self._pruned < 3600:
+                return
+            self._pruned = time.time()
+            cutoff = time.time() - self.retention_days * 86400
             old = self.db.execute("SELECT user, id FROM conversations WHERE updated < ?", (cutoff,)).fetchall()
             for r in old:
                 for table, col in (("events", "conv"), ("results", "conv"), ("conversations", "id")):

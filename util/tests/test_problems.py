@@ -27,8 +27,15 @@ RECORDS = [
 ]
 
 
-def grail(records):
-    return lambda q: ({"records": records, "metadata": {"grail": {"scannedBytes": 19088384}}}, "")
+COUNTS = [{"event.category": "AVAILABILITY", "open": "1"}, {"event.category": "ERROR", "open": "2"}]
+
+
+def grail(records, counts=COUNTS):
+    """The tenant: the count query gets `counts`, the list query `records`."""
+    def run(q):
+        rows = counts if q == core.OPEN_PROBLEMS_COUNT_DQL else records
+        return {"records": rows, "metadata": {"grail": {"scannedBytes": 19088384}}}, ""
+    return run
 
 
 class OpenProblemsTest(unittest.TestCase):
@@ -40,19 +47,30 @@ class OpenProblemsTest(unittest.TestCase):
         self.assertEqual([p["id"] for p in d["items"]], ["P-2609173", "P-2609158"])
         self.assertEqual(d["items"][0]["affected"], 2)
         self.assertAlmostEqual(d["items"][0]["start"], 1790641680.0, places=0)
-        self.assertEqual(d["scanned"], "18.2 MB")
-        self.assertIn('event.status == "ACTIVE"', d["query"])
+        self.assertEqual(d["scanned"], "36.4 MB")            # both queries
+        self.assertIn('event.status == "ACTIVE"', d["queries"][0])
+
+    def test_the_count_is_not_capped_by_the_lists_limit(self):
+        newest = [dict(RECORDS[0], display_id=f"P-{i}") for i in range(50)]      # the list's limit
+        with mock.patch.object(core, "_query_grail",
+                               grail(newest, counts=[{"event.category": "ERROR", "open": "120"}])):
+            d = core.open_problems()
+        self.assertEqual(d["open"], 120)
+        self.assertEqual(d["by_category"], {"ERROR": 120})
+        self.assertEqual(len(d["items"]), 5)
 
     def test_none_open(self):
-        with mock.patch.object(core, "_query_grail", grail([])):
-            self.assertEqual(core.open_problems()["open"], 0)
+        with mock.patch.object(core, "_query_grail", grail([], counts=[])):
+            d = core.open_problems()
+        self.assertEqual((d["open"], d["by_category"], d["items"]), (0, {}, []))
 
     def test_grail_error_is_summarised(self):
         with mock.patch.object(core, "_query_grail", lambda q: (None, "PARSE_ERROR: bad")):
             self.assertIn("error", core.open_problems())
 
-    def test_the_query_passes_the_agents_own_checks(self):
-        self.assertEqual(core.lint_dql(core.OPEN_PROBLEMS_DQL, set()), [])
+    def test_the_queries_pass_the_agents_own_checks(self):
+        for q in (core.OPEN_PROBLEMS_COUNT_DQL, core.OPEN_PROBLEMS_DQL):
+            self.assertEqual(core.lint_dql(q, set()), [], q)
 
 
 class ProblemsEndpointTest(unittest.TestCase):
@@ -74,7 +92,7 @@ class ProblemsEndpointTest(unittest.TestCase):
             first = srv.open_problems("ann")
             second = srv.open_problems("bob")
         self.assertEqual((first["enabled"], first["open"], second["open"]), (True, 3, 3))
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)                  # one count and one list, then cached
         self.assertEqual(first["checked"], second["checked"])
 
     def test_errors_are_not_cached(self):

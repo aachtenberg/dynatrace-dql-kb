@@ -409,8 +409,13 @@ def _summarize(result: dict, rows: int = ROWS_TO_MODEL) -> dict:
     return out
 
 
-# The chat's opening hint: a fixed, read-only query (docs/dql_common_questions.md),
-# run by the server, never written by the model.
+# The chat's opening hint: two fixed, read-only queries (docs/dql_common_questions.md),
+# run by the server, never written by the model. The count is exact however
+# many problems are open; the list only needs the newest few.
+OPEN_PROBLEMS_COUNT_DQL = """fetch dt.davis.problems, from:-7d
+| filter event.status == "ACTIVE"
+| summarize open = countDistinctExact(display_id), by:{event.category}"""
+
 OPEN_PROBLEMS_DQL = """fetch dt.davis.problems, from:-7d
 | filter event.status == "ACTIVE"
 | fields event.start, display_id, event.name, event.category, affected_entity_ids
@@ -421,9 +426,17 @@ OPEN_PROBLEMS_DQL = """fetch dt.davis.problems, from:-7d
 def open_problems(top: int = 5) -> dict:
     """Open Davis problems for the chat's welcome card: how many, by category,
     and the newest few. {"error": ...} when Grail refuses."""
+    counted, error = _query_grail(OPEN_PROBLEMS_COUNT_DQL)
+    if counted is None:
+        return {"error": _error_summary(error)}
     result, error = _query_grail(OPEN_PROBLEMS_DQL)
     if result is None:
         return {"error": _error_summary(error)}
+    by_category = {}
+    for r in counted.get("records") or []:
+        n = _num_or_zero(r.get("open"))           # Grail returns longs as strings
+        if n:
+            by_category[r.get("event.category") or ""] = n
     seen, items = set(), []
     for r in result.get("records") or []:
         pid = r.get("display_id")
@@ -437,10 +450,18 @@ def open_problems(top: int = 5) -> dict:
                       "start": start / 1000 if start else None,
                       "affected": len(affected) if isinstance(affected, list) else 0})
     items.sort(key=lambda p: p["start"] or 0, reverse=True)
-    grail = (result.get("metadata") or {}).get("grail") or {}
-    return {"open": len(items), "by_category": dict(Counter(p["category"] for p in items)),
-            "items": items[:top], "scanned": _fmt_bytes(grail.get("scannedBytes")),
-            "query": OPEN_PROBLEMS_DQL}
+    scanned = sum(_num_or_zero(((q.get("metadata") or {}).get("grail") or {}).get("scannedBytes"))
+                  for q in (counted, result))
+    return {"open": sum(by_category.values()), "by_category": by_category,
+            "items": items[:top], "scanned": _fmt_bytes(scanned),
+            "queries": [OPEN_PROBLEMS_COUNT_DQL, OPEN_PROBLEMS_DQL]}
+
+
+def _num_or_zero(v) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
 
 
 def run_dql_tool(query: str) -> tuple[dict, bool]:

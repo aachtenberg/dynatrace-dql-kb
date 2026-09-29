@@ -34,7 +34,7 @@ COPY util/ ./util/
 # Chat history (SQLite) is the only thing written at runtime, under /data.
 # Mount a volume there to keep it across restarts (EFS on Fargate), or set
 # DQL_CHAT_HISTORY=0 to keep chats in memory only. Run as nobody.
-RUN mkdir -p /data && chown 65534:65534 /data
+RUN mkdir -p /data && chown 65534:65534 /data && chmod 700 /data
 VOLUME ["/data"]
 USER 65534:65534
 EXPOSE 8750

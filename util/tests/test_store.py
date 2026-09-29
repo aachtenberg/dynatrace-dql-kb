@@ -4,8 +4,10 @@
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -125,6 +127,96 @@ class StoreTest(unittest.TestCase):
         self.st.close()
         self.st = store.Store(path)
         self.assertEqual(self.st.conversations("ann")[0]["id"], "c1")
+
+
+class ConcurrencyTest(unittest.TestCase):
+    """The server shares one connection between its threads: reads while
+    another thread writes must neither fail nor see a half-written chat."""
+
+    def test_reads_and_writes_from_many_threads(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = store.Store(os.path.join(d, "chats.db"))
+            errors, n_threads, n_turns = [], 8, 25
+
+            def writer(i):
+                try:
+                    for t in range(n_turns):
+                        conv = f"c{i}"
+                        turn = st.begin_turn("ann", conv, f"q{t}")
+                        st.add_event("ann", conv, turn, "answer", {"text": "a" * 200})
+                        st.save_state("ann", conv, {"messages": [{"n": t}],
+                                                    "results": [(f"r{t}", {"query": "x", "records": [{"v": t}]})],
+                                                    "result_seq": t})
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"writer {i}: {e!r}")
+
+            def reader():
+                try:
+                    for _ in range(n_turns * 3):
+                        for c in st.conversations("ann"):
+                            for e in st.events("ann", c["id"]):
+                                self.assertIn(e["kind"], ("user", "answer"))
+                            # Messages and results come from one save, never half of two.
+                            s = st.load_state("ann", c["id"])
+                            if s and s.get("messages") and s["results"]:     # saved at least once
+                                self.assertEqual(s["messages"][0]["n"], s["results"][0][1]["records"][0]["v"])
+                            st.prefs("ann")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"reader: {e!r}")
+
+            threads = [threading.Thread(target=writer, args=(i,)) for i in range(n_threads)]
+            threads += [threading.Thread(target=reader) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(st.conversations("ann")), n_threads)
+            self.assertEqual(sum(c["turns"] for c in st.conversations("ann")), n_threads * n_turns)
+            st.close()
+
+
+class PermissionsTest(unittest.TestCase):
+    """History holds tenant query results: the database, its WAL files and a
+    folder the store creates are the owner's only, whatever the umask."""
+
+    def modes(self, path):
+        return {p: oct(os.stat(p).st_mode & 0o777) for p in (path, path + "-wal", path + "-shm")
+                if os.path.exists(p)}
+
+    def test_new_database(self):
+        old = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "new", "chats.db")
+                st = store.Store(path)
+                st.begin_turn("ann", "c1", "q")
+                modes = self.modes(path)
+                self.assertEqual(set(modes.values()), {"0o600"}, modes)
+                self.assertEqual(len(modes), 3, "expected the database and both WAL files")
+                self.assertEqual(oct(os.stat(os.path.dirname(path)).st_mode & 0o777), "0o700")
+                st.close()
+        finally:
+            os.umask(old)
+
+    def test_files_an_older_version_left_open_are_tightened(self):
+        old = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "chats.db")
+                legacy = sqlite3.connect(path)             # 0644, WAL files included
+                legacy.execute("PRAGMA journal_mode=WAL")
+                legacy.execute("CREATE TABLE t (x)")
+                legacy.commit()
+                self.assertIn("0o644", self.modes(path).values())
+                st = store.Store(path)
+                st.begin_turn("ann", "c1", "q")
+                modes = self.modes(path)
+                self.assertEqual(set(modes.values()), {"0o600"}, modes)
+                st.close()
+                legacy.close()
+        finally:
+            os.umask(old)
 
 
 class OpenFromEnvTest(unittest.TestCase):

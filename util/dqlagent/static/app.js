@@ -301,7 +301,7 @@
       }
       var ago = when(d.checked);
       card.appendChild(el("p", "pc-foot", "Checked " + (ago === "now" ? "just now" : ago + " ago") +
-        " with a fixed read-only query (" + d.scanned + " scanned), not by the model."));
+        " with fixed read-only queries (" + d.scanned + " scanned), not by the model."));
     });
     return card;
   }
