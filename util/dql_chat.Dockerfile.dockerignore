@@ -1,0 +1,13 @@
+# Build context for util/dql_chat.Dockerfile. BuildKit uses this file instead
+# of the root .dockerignore (which keeps .github out of the MCP image). An
+# allow-list: everything is excluded, then the few paths the chat needs.
+*
+!dt_fetch.py
+!docs/
+!util/
+!.github/agents/dql-expert.md
+util/dt_trace_profiler*
+util/dt_incident*
+**/__pycache__
+**/*.pyc
+util/tests

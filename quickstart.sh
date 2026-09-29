@@ -67,6 +67,10 @@ echo "  ./dt_fetch.sh test"
 echo "  ./dt_fetch.sh all"
 echo "  ./util/dt_trace_profiler.sh --days 1 --shape-top 5 --min-runs 10 --max-runs 500"
 echo
+echo "Chat with your tenant in the browser (Bedrock, or an Ollama it finds on its own):"
+echo "  ./util/dql_agent.sh --check     # model and tenant, and which one fails"
+echo "  ./util/dql_chat.sh"
+echo
 if [[ -f .env ]]; then
   echo "Found .env. Running one connectivity query..."
   "${PY[@]}" dt_fetch.py test || echo "Connectivity test failed. Check DT_ENVIRONMENT_URL and DT_API_TOKEN in .env."
