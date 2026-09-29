@@ -7,6 +7,7 @@
 !util/
 !.github/agents/dql-expert.md
 util/dt_trace_profiler*
+util/dt_incident*
 **/__pycache__
 **/*.pyc
 util/tests
