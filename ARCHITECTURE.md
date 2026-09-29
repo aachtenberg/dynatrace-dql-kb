@@ -122,7 +122,7 @@ sequenceDiagram
 | `dt_fetch.py` | Pulls those two files from the Grail query API | Your tenant |
 | `util/dql_agent.py` | Terminal front end of the agent: keyword search over `docs/`, exact name lookup, and DQL runs through `dt_fetch.py`'s client. Standard library only | The model and your tenant |
 | `util/dql_chat.py` | Browser front end of the same agent, with charts and graphs drawn from query results. Also a container (`util/dql_chat.Dockerfile`) | The model and your tenant |
-| `util/dqlagent/` | The agent itself: `core` (tools and loop), `llm` (Bedrock, OpenAI-compatible, Ollama and Anthropic adapters), `aws` (credentials and SigV4, no boto3), `visuals` (chart and graph specs), `web` (chat server), `static/` (the page, with React Flow vendored) | — |
+| `util/dqlagent/` | The agent itself: `core` (tools and loop), `llm` (Bedrock, OpenAI-compatible, Ollama and Anthropic adapters), `aws` (credentials and SigV4, no boto3), `visuals` (chart and graph specs), `web` (chat server), `store` (chat history and per-user settings in SQLite), `static/` (the page, with React Flow vendored) | — |
 | `util/dt_trace_profiler.py` | Trace profiler. Same client as `dt_fetch.py`. Not in the Docker image | Your tenant |
 | `dql_rag.py` | Index, search, and an optional model call | The model call only |
 | `mcp_server.py` | Same search and generation, as MCP tools | Generation only |
@@ -216,7 +216,7 @@ The CSV it writes contains real service and endpoint names and is gitignored. Se
 
 No install. Each question is a loop of model calls (Bedrock Converse by default; `LLM_PROVIDER` picks another adapter in `util/dqlagent/llm.py`): the model calls `search_docs`, `find_names` and `run_dql` until it can answer, at most 10 rounds. Every call carries `.github/agents/dql-expert.md` as its DQL rules. `run_dql` rejects known mistakes (SQL keywords, `fetch` on a metric, `by:` without braces) before Grail sees them, asks before it runs, caps the scan at `DQL_AGENT_SCAN_LIMIT_GB`, and returns Grail's error text so the model can fix the query. Setup, recipes and troubleshooting are in [util/dql_agent.md](util/dql_agent.md).
 
-The browser chat (`./util/dql_chat.sh`) runs the same loop and adds three tools, `show_timeseries`, `show_bar` and `show_graph`. They take the `result_id` of a query the model ran plus field names; the server builds the chart or graph from that result's records and streams the spec to the page, which draws it with SVG or React Flow. The model never supplies the numbers. Streaming, the query approval round trip, settings and deployment are in [util/dql_chat.md](util/dql_chat.md).
+The browser chat (`./util/dql_chat.sh`) runs the same loop and adds three tools, `show_timeseries`, `show_bar` and `show_graph`. They take the `result_id` of a query the model ran plus field names; the server builds the chart or graph from that result's records and streams the spec to the page, which draws it with SVG or React Flow. The model never supplies the numbers. With history on, `store.py` keeps each chat in SQLite, scoped to its user: the events the page drew (to redraw it) and the agent's messages and query results (so the model can carry on after a restart). Streaming, the query approval round trip, settings, history and deployment are in [util/dql_chat.md](util/dql_chat.md).
 
 ### 6. Use the Copilot agents
 

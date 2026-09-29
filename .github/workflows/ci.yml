@@ -28,3 +28,8 @@ jobs:
 
       - name: byte-compile every module
         run: python -m compileall -q .
+
+      # Standard library only: the chat's history store and its HTTP API,
+      # with a scripted model and a canned Grail result (no credentials).
+      - name: unit tests (util/tests)
+        run: python -m unittest discover -s util/tests -v

@@ -44,6 +44,10 @@ class ModelError(RuntimeError):
     pass
 
 
+class Interrupted(Exception):
+    """A model call cut off because the user pressed Stop."""
+
+
 # Settings the browser may change. Anything else stays in the server's env.
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,200}$")
 REGION_RE = re.compile(r"^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+-\d{1,2}$")
@@ -85,20 +89,10 @@ def _http_json(url: str, body: dict | None, headers: dict, what: str,
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="ignore")
-            try:
-                err = json.loads(detail)
-                err = err.get("error", err) if isinstance(err, dict) else err
-                if isinstance(err, dict):
-                    err = err.get("message") or json.dumps(err)
-                detail = str(err)
-            except ValueError:
-                pass
             if e.code in (429, 500, 502, 503, 504) and attempt < 2:
                 time.sleep(1.5 + 3 * attempt)
                 continue
-            hint = " Check the API key." if e.code in (401, 403) else ""
-            raise ModelError(f"{what} HTTP {e.code}: {detail[:800]}{hint}") from None
+            raise _http_error(what, e) from None
         except urllib.error.URLError as e:
             host = urllib.parse.urlsplit(url).netloc
             raise ModelError(f"Cannot reach {what} at {host}: {e.reason}.") from None
@@ -114,6 +108,56 @@ def _http_json(url: str, body: dict | None, headers: dict, what: str,
     raise ModelError(f"{what} kept failing; try again in a minute.")
 
 
+def _http_error(what: str, e: urllib.error.HTTPError) -> ModelError:
+    """The provider's own message from an HTTP error body."""
+    detail = e.read().decode("utf-8", errors="ignore")
+    try:
+        err = json.loads(detail)
+        err = err.get("error", err) if isinstance(err, dict) else err
+        if isinstance(err, dict):
+            err = err.get("message") or json.dumps(err)
+        detail = str(err)
+    except ValueError:
+        pass
+    hint = " Check the API key." if e.code in (401, 403) else ""
+    return ModelError(f"{what} HTTP {e.code}: {detail[:800]}{hint}")
+
+
+def _http_stream(url: str, body: dict, what: str, cancel, timeout: int = 300):
+    """POST JSON and yield the reply's JSON lines as they arrive. When `cancel`
+    (a threading.Event) is set, stop reading and close the connection, which
+    makes a server such as Ollama stop generating; raises Interrupted."""
+    if cancel.is_set():
+        raise Interrupted()
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
+                                 headers={"accept": "application/x-ndjson",
+                                          "content-type": "application/json"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        raise _http_error(what, e) from None
+    except urllib.error.URLError as e:
+        raise ModelError(f"Cannot reach {what} at {urllib.parse.urlsplit(url).netloc}: {e.reason}.") from None
+    except (http.client.HTTPException, OSError) as e:
+        raise ModelError(f"The connection to {what} failed: {e.__class__.__name__} {e}".rstrip()) from None
+    with resp:
+        try:
+            for line in resp:
+                if cancel.is_set():
+                    raise Interrupted()
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    raise ModelError(f"{what} returned something that is not JSON.") from None
+        except (http.client.HTTPException, OSError) as e:
+            raise ModelError(f"The connection to {what} failed: {e.__class__.__name__} {e}".rstrip()) from None
+    if cancel.is_set():
+        raise Interrupted()
+
+
 def _text(blocks) -> str:
     return "\n".join(b["text"] for b in blocks if b.get("type") == "text" and b.get("text"))
 
@@ -125,6 +169,7 @@ class ChatModel:
     provider = ""
     label = ""
     default_max_tokens = 4096
+    supports_cancel = False     # chat() takes cancel= (a threading.Event) and stops early
 
     def __init__(self, settings: dict | None = None):
         self.settings = {f["key"]: f.get("default") for f in self.settings_fields()}
@@ -420,13 +465,28 @@ class OpenAICompatModel(ChatModel):
 # Ollama (native /api/chat, so num_ctx is honored)
 # ---------------------------------------------------------------------------
 
+def ollama_base() -> str:
+    base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
+def ollama_up(timeout: float = 1.5) -> bool:
+    """Whether an Ollama server answers at OLLAMA_BASE_URL (for the chat's
+    provider list; a quick GET, no model is loaded)."""
+    try:
+        with urllib.request.urlopen(ollama_base() + "/api/version", timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
 class OllamaModel(ChatModel):
     provider = "ollama"
     label = "Ollama"
+    supports_cancel = True      # streams, so Stop frees the GPU at once
 
     def __init__(self, settings=None):
-        base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        self.base = base[:-3] if base.endswith("/v1") else base
+        self.base = ollama_base()
         super().__init__(settings)
 
     @classmethod
@@ -445,11 +505,35 @@ class OllamaModel(ChatModel):
         return [f"model:   {self.settings['model']} at {self.base} (num_ctx {self.settings['num_ctx']})"]
 
     def model_options(self):
+        """Installed chat models. The agent needs tool calls, so a model whose
+        capabilities lack "tools" is listed as disabled; embedding-only models
+        are left out. Older servers without capabilities list everything."""
         data = _http_json(self.base + "/api/tags", None, {}, "Ollama", timeout=20)
-        names = sorted(m.get("name", "") for m in data.get("models", []) if m.get("name"))
-        return [{"value": n, "label": n} for n in names if model_allowed(n)]
+        opts, cant = [], []
+        for m in sorted(data.get("models", []), key=lambda m: m.get("name", "")):
+            name = m.get("name", "")
+            if not name or not model_allowed(name):
+                continue
+            try:
+                info = _http_json(self.base + "/api/show", {"model": name}, {}, "Ollama", timeout=10)
+            except ModelError:
+                info = {}
+            caps = info.get("capabilities")
+            if caps is not None and "completion" not in caps:
+                continue                                    # embedding models
+            size = (m.get("details") or {}).get("parameter_size", "")
+            ctx = next((v for k, v in (info.get("model_info") or {}).items()
+                        if k.endswith(".context_length")), None)
+            detail = " · ".join(x for x in (size, f"{ctx // 1024}k context" if ctx else "") if x)
+            opt = {"value": name, "label": name, "detail": detail}
+            if caps is not None and "tools" not in caps:
+                opt.update(disabled=True, why="cannot call tools")
+                cant.append(opt)
+            else:
+                opts.append(opt)
+        return opts + cant
 
-    def chat(self, system, messages, tools, max_tokens=None):
+    def chat(self, system, messages, tools, max_tokens=None, cancel=None):
         msgs = [{"role": "system", "content": system}] if system else []
         for m in messages:
             if m["role"] == "assistant":
@@ -476,7 +560,23 @@ class OllamaModel(ChatModel):
             body["tools"] = [{"type": "function", "function": {
                 "name": t["name"], "description": t["description"], "parameters": t["schema"]}}
                 for t in tools]
-        data = _http_json(self.base + "/api/chat", body, {}, "Ollama")
+        if cancel is None:
+            data = _http_json(self.base + "/api/chat", body, {}, "Ollama")
+        else:
+            # Streamed: the text and tool calls arrive in pieces; a stop
+            # closes the connection and Ollama stops generating.
+            text, calls, data = [], [], {}
+            for chunk in _http_stream(self.base + "/api/chat", dict(body, stream=True), "Ollama", cancel):
+                if chunk.get("error"):
+                    raise ModelError(f"Ollama: {chunk['error']}")
+                piece = chunk.get("message") or {}
+                text.append(piece.get("content") or "")
+                calls.extend(piece.get("tool_calls") or [])
+                if chunk.get("done"):
+                    data = chunk
+                    break
+            data = {"message": {"content": "".join(text), "tool_calls": calls},
+                    "done_reason": data.get("done_reason")}
         msg = data.get("message") or {}
         content = []
         if msg.get("content"):
@@ -602,6 +702,29 @@ PROVIDERS = {
 
 def provider_name() -> str:
     return (os.getenv("LLM_PROVIDER") or "bedrock").strip().lower()
+
+
+# (label, short label) for pickers.
+PROVIDER_LABELS = {
+    "bedrock": ("Amazon Bedrock", "Bedrock"),
+    "ollama": ("Ollama", "Ollama"),
+    "anthropic": ("Anthropic API", "Anthropic"),
+    "openai_compatible": ("OpenAI-compatible server", "Gateway"),
+    "vllm": ("vLLM", "vLLM"),
+    "openai": ("OpenAI", "OpenAI"),
+    "azure_openai": ("Azure OpenAI", "Azure"),
+}
+
+
+def provider_label(provider: str) -> tuple[str, str]:
+    if provider in PROVIDER_LABELS:
+        label, short = PROVIDER_LABELS[provider]
+        if provider == "ollama":
+            host = urllib.parse.urlsplit(ollama_base()).hostname or ""
+            label = "Ollama (this machine)" if host in ("localhost", "127.0.0.1", "::1") else f"Ollama ({host})"
+        return label, short
+    label = getattr(PROVIDERS.get(provider), "label", "") or provider
+    return label, label
 
 
 def model_class(provider: str | None = None):

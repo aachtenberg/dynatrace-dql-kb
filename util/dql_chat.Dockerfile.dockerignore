@@ -9,3 +9,4 @@
 util/dt_trace_profiler*
 **/__pycache__
 **/*.pyc
+util/tests

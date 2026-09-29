@@ -248,9 +248,19 @@ Kubernetes) to a query that runs. Start from that query and adapt it.
 3. {run_step}
 
 How to reply:
-- This is a chat. Be short. Lead with the answer from the records: a number, \
-or a compact table for lists (at most 15 rows, say if there are more). Then \
-the query that produced it in a ```dql block. No preamble.
+- This is a chat. Be short. No preamble. In this order:
+  1. Summary: one or two sentences that answer the question from the \
+records (the number, the verdict, the top item).
+  2. Worth a look: things in the records the reader would want to know \
+even though they did not ask: an outlier, errors, a spike, one host or \
+service carrying most of the load, a value near a limit, data that looks \
+missing, a result that was cut off. At most three bullets, each naming the \
+entity and the number. Put them in a blockquote that starts with \
+"**Worth a look**". Leave the section out when nothing stands out; never \
+pad it or speculate beyond the records.
+  3. Details: a compact table for lists (at most 15 rows, say if there are \
+more), only when it adds to the summary.
+  4. The query that produced it in a ```dql block.
 - If the question is vague, choose the sensible reading, run it, and say in \
 one line what you assumed.
 - Only show a query that ran, or one the user chose not to run.
@@ -276,6 +286,8 @@ For a call graph, smartscapeEdges rows give source_id and target_id; add \
 getNodeName() fields for readable names.
 - One visual per point. None for a single number. After a visual, still state \
 the key numbers in text; the reader may not look at the chart.
+- In show_graph, pass the entities you call out under "Worth a look" as \
+highlight, so the graph marks them.
 """
 
 RUN_STEP_ON = ("Run it with run_dql. When you need to see a source's real "
@@ -388,11 +400,47 @@ def _summarize(result: dict, rows: int = ROWS_TO_MODEL) -> dict:
     }
     if len(records) > rows:
         out["note"] = f"Only the first {rows} of {len(records)} records are shown."
+    else:
+        out["complete"] = True      # every record Grail returned is here; nothing was cut
     notes = [n.get("message") for n in grail.get("notifications", []) or []
              if isinstance(n, dict) and n.get("message")]
     if notes:
         out["grail_notifications"] = notes[:5]
     return out
+
+
+# The chat's opening hint: a fixed, read-only query (docs/dql_common_questions.md),
+# run by the server, never written by the model.
+OPEN_PROBLEMS_DQL = """fetch dt.davis.problems, from:-7d
+| filter event.status == "ACTIVE"
+| fields event.start, display_id, event.name, event.category, affected_entity_ids
+| sort event.start desc
+| limit 50"""
+
+
+def open_problems(top: int = 5) -> dict:
+    """Open Davis problems for the chat's welcome card: how many, by category,
+    and the newest few. {"error": ...} when Grail refuses."""
+    result, error = _query_grail(OPEN_PROBLEMS_DQL)
+    if result is None:
+        return {"error": _error_summary(error)}
+    seen, items = set(), []
+    for r in result.get("records") or []:
+        pid = r.get("display_id")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        start = visuals._ts_ms(r.get("event.start"))
+        affected = r.get("affected_entity_ids")
+        items.append({"id": pid, "name": r.get("event.name") or "",
+                      "category": r.get("event.category") or "",
+                      "start": start / 1000 if start else None,
+                      "affected": len(affected) if isinstance(affected, list) else 0})
+    items.sort(key=lambda p: p["start"] or 0, reverse=True)
+    grail = (result.get("metadata") or {}).get("grail") or {}
+    return {"open": len(items), "by_category": dict(Counter(p["category"] for p in items)),
+            "items": items[:top], "scanned": _fmt_bytes(grail.get("scannedBytes")),
+            "query": OPEN_PROBLEMS_DQL}
 
 
 def run_dql_tool(query: str) -> tuple[dict, bool]:
@@ -494,6 +542,7 @@ class Agent:
         self.approver = approver or terminal_approver
         self.max_turns = max_turns or MAX_TURNS
         self.max_tokens = max_tokens
+        self.cancel = None      # a threading.Event: set, and a model that can stops mid-reply
         self.messages: list[dict] = []
         self.results: OrderedDict[str, dict] = OrderedDict()
         self._result_seq = 0
@@ -510,6 +559,23 @@ class Agent:
     def reset(self):
         self.messages = []
         self.results.clear()
+
+    def state(self) -> dict:
+        """What a conversation needs to carry on later: the model's messages and
+        the query results visuals draw from. Plain JSON."""
+        return {"messages": self.messages, "results": list(self.results.items()),
+                "result_seq": self._result_seq}
+
+    def snapshot(self) -> dict:
+        """state() as it is now, unaffected by a question asked afterwards
+        (earlier messages are never changed in place, only appended to)."""
+        return {"messages": list(self.messages), "results": list(self.results.items()),
+                "result_seq": self._result_seq}
+
+    def load_state(self, state: dict):
+        self.messages = list(state.get("messages") or [])
+        self.results = OrderedDict((rid, r) for rid, r in state.get("results") or [])
+        self._result_seq = int(state.get("result_seq") or len(self.results))
 
     # -- tools -------------------------------------------------------------
     def _run_query(self, q: str) -> tuple[str, bool]:
@@ -633,7 +699,9 @@ class Agent:
 
     def _call_model(self):
         self.emit("thinking")
-        reply = self.model.chat(self.system, self.messages, self.tools, self.max_tokens)
+        extra = {"cancel": self.cancel} if self.cancel is not None and \
+            getattr(self.model, "supports_cancel", False) else {}
+        reply = self.model.chat(self.system, self.messages, self.tools, self.max_tokens, **extra)
         self.messages.append({"role": "assistant", "content": reply["content"]})
         return reply
 

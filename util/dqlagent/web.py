@@ -7,11 +7,18 @@ authenticating load balancer. Setup and deployment: util/dql_chat.md.
     GET  /healthz           200 "ok", for load balancers
     GET  /api/config        provider, settings (with current values), tenant
     GET  /api/models        options for the model picker, from the provider
-    POST /api/settings      change this chat's settings
+    GET  /api/problems      open Davis problems for the welcome card (a fixed query)
+    GET  /api/conversations this user's past chats, newest first
+    GET  /api/conversation  one chat's events, to redraw it (?id=)
+    POST /api/settings      change this user's settings
     POST /api/chat          ask; the reply is a text/event-stream of agent events
     POST /api/approve       answer a "run this query?" prompt
     POST /api/cancel        stop the answer in progress
-    POST /api/reset         start a new conversation
+    POST /api/conversation/rename, /api/conversation/delete
+
+A conversation is named by the id the page sends as `session`; a new id is a
+new chat. With history on (store.py) conversations and settings survive a
+restart, and reopening one gives the model its earlier messages and results.
 
 Access (DQL_CHAT_AUTH):
     token   default. A random token in the URL printed at start; every API call
@@ -29,6 +36,7 @@ import mimetypes
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -37,7 +45,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import aws, core, llm
+from . import aws, core, llm, store
 
 import dt_fetch  # noqa: E402
 
@@ -73,6 +81,7 @@ class Config:
         self.idle_seconds = int(os.getenv("DQL_CHAT_IDLE_MINUTES", "240")) * 60
         self.approval_timeout = int(os.getenv("DQL_CHAT_APPROVAL_TIMEOUT", "600"))
         self.audit = os.getenv("DQL_CHAT_AUDIT", "queries").strip().lower()
+        self.problems_hint = _env_flag("DQL_CHAT_PROBLEMS", "1")
         self.loopback = self.host in ("127.0.0.1", "localhost", "::1")
 
 
@@ -102,41 +111,108 @@ def common_fields(model: llm.ChatModel | None) -> list[dict]:
 
 
 class Session:
+    """One conversation in memory. With history on it is rebuilt from the
+    store whenever it is not in memory (after a restart, or when evicted)."""
+
     def __init__(self, server: "ChatServer", sid: str, user: str):
         self.server, self.id, self.user = server, sid, user
         self.lock = threading.Lock()            # one question at a time
-        self.model_settings: dict = {}          # provider-specific, validated
+        self.provider = server.providers[0]     # one the server offers (DQL_CHAT_PROVIDERS)
+        self.model_settings: dict = {}          # for self.provider, validated
+        self.by_provider: dict[str, dict] = {}  # the user's last settings for each provider
         self.max_turns = core.MAX_TURNS
         self.max_tokens: int | None = None
         self.model: llm.ChatModel | None = None
         self.agent: core.Agent | None = None
-        self.pending: dict[str, dict] = {}
-        self.cancelled = threading.Event()
-        self.writer = None
+        self.pending: dict[str, dict] = {}      # approval prompts waiting, by id
+        self.run: "Run | None" = None           # the question being answered
         self.last_used = time.time()
+        self._load_prefs()
+
+    # -- settings are per user and saved with the history --------------------
+    def _load_prefs(self):
+        """Start from the user's saved settings, dropping any the server no
+        longer allows (a changed provider or DQL_CHAT_ALLOWED_MODELS)."""
+        st = self.server.store
+        prefs = st.prefs(self.user) if st else {}
+        limits = {f["key"]: f for f in common_fields(None)}
+        for key in ("max_turns", "max_tokens"):
+            v = prefs.get(key)
+            if isinstance(v, int) and limits[key]["min"] <= v <= limits[key]["max"]:
+                setattr(self, key, v)
+        saved = prefs.get("by_provider")
+        if not isinstance(saved, dict):         # the first format: one provider's settings
+            saved = {prefs["provider"]: prefs.get("model_settings")} if prefs.get("provider") else {}
+        self.by_provider = {p: s for p, s in saved.items()
+                            if p in self.server.providers and isinstance(s, dict)}
+        if prefs.get("provider") in self.server.providers:
+            self.provider = prefs["provider"]
+        self.model_settings = self._valid(self.provider, self.by_provider.get(self.provider))
+
+    @staticmethod
+    def _valid(provider: str, settings: dict | None) -> dict:
+        try:
+            clean = llm.model_class(provider).validate(settings or {})
+        except llm.ModelError:
+            return {}
+        return {k: v for k, v in clean.items() if v not in (None, "")}
+
+    def _save_prefs(self):
+        st = self.server.store
+        if st:
+            st.save_prefs(self.user, {"provider": self.provider,
+                                      "by_provider": {**self.by_provider, self.provider: self.model_settings},
+                                      "max_turns": self.max_turns, "max_tokens": self.max_tokens})
+
+    def record(self, kind: str, data: dict, turn: int):
+        """Keep an event of a question in the history. A failing disk never
+        stops the chat."""
+        st = self.server.store
+        if st and turn:
+            try:
+                st.add_event(self.user, self.id, turn, kind, data)
+            except sqlite3.Error as e:
+                print(f"history: could not save a {kind} event: {e}", file=sys.stderr)
 
     # The model is built lazily; building a Bedrock one may look up the default.
     def get_model(self) -> llm.ChatModel:
         if self.model is None:
             settings = dict(self.model_settings)
-            key = (llm.provider_name(), settings.get("region") or "")
+            key = (self.provider, settings.get("region") or "")
             if not settings.get("model") and key in self.server.default_models:
                 settings["model"] = self.server.default_models[key]
-            self.model = llm.make_model(settings=settings)
+            self.model = llm.make_model(self.provider, settings=settings)
             if not self.model_settings.get("model"):
                 self.server.default_models[key] = self.model.settings.get("model", "")
         return self.model
 
+    def new_agent(self, state: dict | None = None) -> core.Agent:
+        # on_event and approver are set per question (Run); quiet until then.
+        agent = core.Agent(self.get_model(), self.server.index, self.server.can_run,
+                           visuals_on=True, on_event=lambda kind, data: None,
+                           approver=lambda query: (False, ""), max_turns=self.max_turns,
+                           max_tokens=self.max_tokens)
+        if state:
+            agent.load_state(state)
+        return agent
+
     def get_agent(self) -> core.Agent:
         if self.agent is None:
-            self.agent = core.Agent(self.get_model(), self.server.index, self.server.can_run,
-                                    visuals_on=True, on_event=self.forward,
-                                    approver=self.approver, max_turns=self.max_turns,
-                                    max_tokens=self.max_tokens)
+            st = self.server.store
+            # With history, carry on the conversation where it left off.
+            self.agent = self.new_agent(st.load_state(self.user, self.id) if st else None)
         return self.agent
 
+    def save_state(self, turn: int):
+        st = self.server.store
+        if st and self.agent is not None and turn:
+            try:
+                st.save_state(self.user, self.id, self.agent.state())
+            except sqlite3.Error as e:
+                print(f"history: could not save the conversation: {e}", file=sys.stderr)
+
     def fields(self) -> list[dict]:
-        cls = llm.model_class()
+        cls = llm.model_class(self.provider)
         model = self.model
         out = []
         for f in common_fields(model):
@@ -150,7 +226,13 @@ class Session:
         return out
 
     def apply_settings(self, values: dict):
-        """Validate and apply. Changing the model or region starts a new chat."""
+        """Validate and apply. Changing the provider, model or region starts a
+        new chat."""
+        values = dict(values)
+        provider = str(values.pop("provider", "") or self.provider).strip().lower()
+        if provider not in self.server.providers:
+            raise llm.ModelError(f"{provider!r} is not offered on this server. It offers: "
+                                 + ", ".join(self.server.providers) + ".")
         common = {f["key"]: f for f in common_fields(self.model)}
         new_turns, new_tokens = self.max_turns, self.max_tokens
         provider_values = {}
@@ -169,54 +251,82 @@ class Session:
                     new_tokens = value
             else:
                 provider_values[key] = value
-        clean = llm.model_class().validate(provider_values)
-        changed = {k: v for k, v in clean.items() if v != self.model_settings.get(k)
-                   and not (self.model is not None and v == self.model.settings.get(k))}
-        if changed:
+        clean = llm.model_class(provider).validate(provider_values)
+        if provider != self.provider:
+            # Another provider: start from the user's last settings for it.
+            candidate = {**self._valid(provider, self.by_provider.get(provider)), **clean}
+            model = llm.make_model(provider, settings=candidate)    # raises if unusable
+            self.by_provider[self.provider] = self.model_settings
+            self.provider = provider
+            self.model_settings = {k: v for k, v in candidate.items() if v not in (None, "")}
+            self.model, self.agent = model, None
+            changed = {"provider": provider}
+        else:
+            changed = {k: v for k, v in clean.items() if v != self.model_settings.get(k)
+                       and not (self.model is not None and v == self.model.settings.get(k))}
+        if changed and "provider" not in changed:
             candidate = {**self.model_settings, **clean}
             if "region" in changed and "model" not in changed:
                 candidate.pop("model", None)    # a model id rarely spans regions
-            model = llm.make_model(settings=candidate)     # raises if unusable
+            model = llm.make_model(provider, settings=candidate)    # raises if unusable
             self.model_settings = {k: v for k, v in candidate.items() if v not in (None, "")}
             self.model, self.agent = model, None
         self.max_turns, self.max_tokens = new_turns, new_tokens
         if self.agent is not None:
             self.agent.max_turns, self.agent.max_tokens = new_turns, new_tokens
+        self._save_prefs()
+        self.server.spread_settings(self, bool(changed))
         return bool(changed)
 
-    # -- streaming and approval --------------------------------------------
+
+class Run:
+    """One question being answered: its stream, its history turn and its stop
+    flag. Once stopped it is silent, so an answer still finishing in the
+    background after Stop can never reach the page or the history."""
+
+    def __init__(self, sess: Session, writer: "SSEWriter", turn: int):
+        self.sess, self.writer, self.turn = sess, writer, turn
+        self.cancelled = threading.Event()      # also the model's cancel flag
+        self.lock = threading.Lock()            # one event at a time; stop waits for it
+        self.slots: list[dict] = []
+
+    def stop(self):
+        self.cancelled.set()
+        for slot in list(self.slots):
+            slot["event"].set()
+
     def forward(self, kind: str, data: dict):
-        if self.cancelled.is_set():
-            raise Cancelled()
-        if kind == "result":
-            audit(self.server.cfg, event="query", user=self.user, session=self.id,
-                  query=data.get("query"), records=data.get("record_count"),
-                  scanned=data.get("scanned"))
-        elif kind == "query_error":
-            audit(self.server.cfg, event="query_error", user=self.user, session=self.id,
-                  query=data.get("query"), error=data.get("summary"))
-        if self.writer is None or not self.writer.send(kind, data):
-            self.cancelled.set()
-            raise Cancelled()
+        sess, cfg = self.sess, self.sess.server.cfg
+        with self.lock:
+            if self.cancelled.is_set():
+                raise Cancelled()
+            sess.record(kind, data, self.turn)
+            if kind == "result":
+                audit(cfg, event="query", user=sess.user, session=sess.id, query=data.get("query"),
+                      records=data.get("record_count"), scanned=data.get("scanned"))
+            elif kind == "query_error":
+                audit(cfg, event="query_error", user=sess.user, session=sess.id,
+                      query=data.get("query"), error=data.get("summary"))
+            if not self.writer.send(kind, data):
+                self.stop()
+                raise Cancelled()
 
     def approver(self, query: str) -> tuple[bool, str]:
         aid = secrets.token_hex(8)
         slot = {"event": threading.Event(), "run": False, "said": ""}
-        self.pending[aid] = slot
+        self.sess.pending[aid] = slot
+        self.slots.append(slot)
         try:
             self.forward("approval", {"id": aid, "query": query})
-            answered = slot["event"].wait(self.server.cfg.approval_timeout)
+            answered = slot["event"].wait(self.sess.server.cfg.approval_timeout)
         finally:
-            self.pending.pop(aid, None)
+            self.sess.pending.pop(aid, None)
+            self.slots.remove(slot)
         if self.cancelled.is_set():
             raise Cancelled()
         if not answered:
             return False, ""
         return slot["run"], slot["said"]
-
-    def release_approvals(self):
-        for slot in list(self.pending.values()):
-            slot["event"].set()
 
 
 class SSEWriter:
@@ -249,18 +359,81 @@ class SSEWriter:
 # Server
 # ---------------------------------------------------------------------------
 
+def chat_providers() -> list[str]:
+    """Providers the browser may pick from, the server's own (LLM_PROVIDER)
+    first. DQL_CHAT_PROVIDERS lists them; "auto" (the default) adds a local
+    Ollama when one answers at OLLAMA_BASE_URL. URLs and keys stay here."""
+    main = llm.provider_name()
+    raw = (os.getenv("DQL_CHAT_PROVIDERS") or "auto").strip().lower()
+    if raw == "auto":
+        names = [main] + (["ollama"] if main != "ollama" and llm.ollama_up() else [])
+    else:
+        names = [main] + [p.strip() for p in raw.split(",") if p.strip()]
+    names = list(dict.fromkeys(names))
+    unknown = [p for p in names if p not in llm.PROVIDERS]
+    if unknown:
+        raise SystemExit(f"DQL_CHAT_PROVIDERS: unknown provider(s) {', '.join(unknown)}. "
+                         f"Use: {', '.join(sorted(llm.PROVIDERS))}, or auto.")
+    return names
+
+
 class ChatServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, history: "store.Store | None" = None,
+                 providers: list[str] | None = None):
         self.cfg = cfg
         self.index = core.DocIndex()
         self.can_run = bool(dt_fetch.DT_ENVIRONMENT_URL and dt_fetch.DT_API_TOKEN)
+        self.store = history
+        self.providers = providers or [llm.provider_name()]
         self.sessions: dict[str, Session] = {}
         self.sessions_lock = threading.Lock()
         self.default_models: dict = {}
         self.option_cache: dict = {}
+        self.problems_cache: tuple[float, dict] | None = None
+        self.problems_lock = threading.Lock()
         super().__init__((cfg.host, cfg.port), Handler)
+
+    def open_problems(self, user: str) -> dict:
+        """The welcome card's open problems: one fixed query, shared by every
+        user for a minute (the tenant is the same for all)."""
+        if not (self.cfg.problems_hint and self.can_run):
+            return {"enabled": False}
+        with self.problems_lock:
+            cached = self.problems_cache
+            if cached and time.time() - cached[0] < 60:
+                return {"enabled": True, **cached[1], "checked": cached[0]}
+            data = core.open_problems()
+            now = time.time()
+            audit(self.cfg, event="problems_check", user=user, records=data.get("open"),
+                  scanned=data.get("scanned"), error=data.get("error"))
+            if "error" not in data:
+                self.problems_cache = (now, data)
+        return {"enabled": True, **data, "checked": now}
+
+    def spread_settings(self, source: Session, model_changed: bool):
+        """Settings belong to the user: apply a change to their other open
+        chats too. A new model rebuilds their agents from the saved history
+        on next use, so no conversation loses its messages."""
+        if not self.store:
+            return
+        with self.sessions_lock:
+            others = [s for s in self.sessions.values()
+                      if s.user == source.user and s is not source and not s.lock.locked()]
+        for s in others:
+            s.provider = source.provider
+            s.model_settings = dict(source.model_settings)
+            s.by_provider = dict(source.by_provider)
+            s.max_turns, s.max_tokens = source.max_turns, source.max_tokens
+            if model_changed:
+                s.model, s.agent = None, None
+            elif s.agent is not None:
+                s.agent.max_turns, s.agent.max_tokens = s.max_turns, s.max_tokens
+
+    def drop(self, user: str, sid: str):
+        with self.sessions_lock:
+            self.sessions.pop(f"{user}\x00{sid}", None)
 
     def session(self, sid: str, user: str) -> Session:
         key = f"{user}\x00{sid}"
@@ -372,8 +545,20 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(200, self._config(self._session(query.get("session", ""), user)))
                 if path == "/api/models":
                     return self._json(200, self._models(self._session(query.get("session", ""), user),
-                                                        query.get("region", "")))
-            except (ValueError, llm.ModelError) as e:
+                                                        query.get("region", ""), query.get("provider", "")))
+                if path == "/api/problems":
+                    return self._json(200, self.server.open_problems(user))
+                st = self.server.store
+                if path == "/api/conversations":
+                    return self._json(200, {"history": st is not None,
+                                            "conversations": st.conversations(user) if st else []})
+                if path == "/api/conversation":
+                    cid = query.get("id", "")
+                    conv = st.get(user, cid) if st and SESSION_ID.match(cid) else None
+                    if not conv:
+                        return self._json(404, {"error": "No such conversation."})
+                    return self._json(200, {**conv, "events": st.events(user, cid)})
+            except (ValueError, llm.ModelError, sqlite3.Error) as e:
                 return self._json(400, {"error": str(e)})
             return self._json(404, {"error": "Not found."})
         if self.server.cfg.auth == "proxy" and self._user() is None:
@@ -410,15 +595,25 @@ class Handler(BaseHTTPRequestHandler):
                 slot["event"].set()
                 return self._json(200, {"ok": True})
             if path == "/api/cancel":
-                sess.cancelled.set()
-                sess.release_approvals()
+                run = sess.run
+                if run:
+                    run.stop()
                 return self._json(200, {"ok": True})
-            if path == "/api/reset":
-                if sess.lock.locked():
-                    return self._json(409, {"error": "Still answering; stop it first."})
-                if sess.agent:
-                    sess.agent.reset()
-                return self._json(200, {"ok": True})
+            if path in ("/api/conversation/rename", "/api/conversation/delete"):
+                st, cid = self.server.store, str(body.get("id", ""))
+                if not st:
+                    return self._json(400, {"error": "History is off on this server."})
+                if not SESSION_ID.match(cid):
+                    raise ValueError("Missing or malformed conversation id.")
+                if path.endswith("rename"):
+                    ok = st.rename(user, cid, str(body.get("title") or ""))
+                else:
+                    other = self.server.sessions.get(f"{user}\x00{cid}")
+                    if other and other.lock.locked():
+                        return self._json(409, {"error": "Still answering in that chat; stop it first."})
+                    ok = st.delete(user, cid)
+                    self.server.drop(user, cid)
+                return self._json(200 if ok else 404, {"ok": ok} if ok else {"error": "No such conversation."})
             if path == "/api/settings":
                 if not self.server.cfg.allow_settings:
                     return self._json(403, {"error": "Settings are fixed on this server."})
@@ -429,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("values must be an object.")
                 reset = sess.apply_settings(values)
                 return self._json(200, {**self._config(sess), "reset": reset})
-        except (ValueError, llm.ModelError) as e:
+        except (ValueError, llm.ModelError, sqlite3.Error) as e:
             return self._json(400, {"error": str(e)})
         return self._json(404, {"error": "Not found."})
 
@@ -440,20 +635,28 @@ class Handler(BaseHTTPRequestHandler):
             name = sess.get_model().name
         except llm.ModelError as e:
             error = str(e)
-        cls = llm.model_class()
         tenant = dt_fetch.DT_ENVIRONMENT_URL if self.server.can_run else ""
-        return {"provider": llm.provider_name(),
-                "provider_label": getattr(cls, "label", "") or llm.provider_name(),
+        label, short = llm.provider_label(sess.provider)
+        return {"provider": sess.provider, "provider_label": label, "provider_short": short,
+                "providers": [dict(zip(("value", "label", "short"), (p, *llm.provider_label(p))))
+                              for p in self.server.providers],
                 "model_name": name, "error": error,
                 "tenant": urllib.parse.urlsplit(tenant).netloc if tenant else "",
                 "can_run": self.server.can_run,
                 "allow_settings": self.server.cfg.allow_settings,
                 "auto_run": self.server.cfg.auto_run,
+                "problems_hint": self.server.cfg.problems_hint and self.server.can_run,
                 "user": "" if self.server.cfg.auth == "token" else sess.user,
+                "history": {"on": self.server.store is not None,
+                            "days": self.server.store.retention_days if self.server.store else 0},
                 "fields": sess.fields()}
 
-    def _models(self, sess: Session, region: str) -> dict:
-        provider = llm.provider_name()
+    def _models(self, sess: Session, region: str, provider: str = "") -> dict:
+        """The model picker's options for one of the server's providers (the
+        chat's own by default)."""
+        provider = (provider or sess.provider).strip().lower()
+        if provider not in self.server.providers:
+            raise ValueError(f"{provider!r} is not offered on this server.")
         if provider == "bedrock":
             region = region or sess.model_settings.get("region") or \
                 (sess.model.settings.get("region") if sess.model else "") or aws.default_region()
@@ -471,8 +674,11 @@ class Handler(BaseHTTPRequestHandler):
             except aws.BedrockError as e:
                 raise llm.ModelError(str(e)) from None
             options = llm.bedrock_options(client)
-        else:
+        elif provider == sess.provider:
             options = sess.get_model().model_options()
+        else:
+            options = llm.make_model(provider, settings=sess._valid(
+                provider, sess.by_provider.get(provider))).model_options()
         self.server.option_cache[key] = (time.time(), options)
         return {"options": options}
 
@@ -491,37 +697,74 @@ class Handler(BaseHTTPRequestHandler):
             except llm.ModelError as e:
                 return self._json(400, {"error": str(e)})
             self._headers(200, "text/event-stream; charset=utf-8")
-            writer = sess.writer = SSEWriter(self.wfile)
-            sess.cancelled.clear()
+            writer = SSEWriter(self.wfile)
+            turn = 0
+            st = self.server.store
+            if st:
+                try:
+                    turn = st.begin_turn(sess.user, sess.id, message)
+                    conv = st.get(sess.user, sess.id) or {}
+                    writer.send("conversation", {"id": sess.id, "title": conv.get("title", "")})
+                except sqlite3.Error as e:
+                    print(f"history: could not save the question: {e}", file=sys.stderr)
+            run = sess.run = Run(sess, writer, turn)
 
             def heartbeat():
                 # Keeps proxies and load balancers from closing a quiet stream
                 # while the model thinks or a query runs.
                 while not stop.wait(15):
                     if not writer.ping():
-                        sess.cancelled.set()
-                        sess.release_approvals()
+                        run.stop()
                         return
             threading.Thread(target=heartbeat, daemon=True).start()
 
             agent.approve = "always" if body.get("auto") else "ask"
+            agent.on_event, agent.approver, agent.cancel = run.forward, run.approver, run.cancelled
             if self.server.cfg.audit == "full":
                 audit(self.server.cfg, event="question", user=sess.user, session=sess.id,
                       text=message)
-            try:
-                agent.ask(message)
+
+            # The answer runs on its own thread, so Stop answers the page at
+            # once even while a model call or a query is still out.
+            before, outcome, finished = agent.snapshot(), {}, threading.Event()
+
+            def work():
+                try:
+                    agent.ask(message)
+                    outcome["kind"] = "done"
+                except (Cancelled, llm.Interrupted):
+                    outcome["kind"] = "cancelled"
+                except llm.ModelError as e:
+                    outcome.update(kind="error", text=str(e))
+                except Exception as e:      # keep the stream well-formed; log the rest
+                    traceback.print_exc()
+                    outcome.update(kind="error", text=f"Internal error: {e.__class__.__name__}: {e}")
+                finally:
+                    finished.set()
+            threading.Thread(target=work, daemon=True, name=f"answer-{sess.id}").start()
+            while not finished.wait(0.2) and not run.cancelled.is_set():
+                pass
+            if not finished.is_set():
+                # Stopped mid-call: let that answer finish (or be cut off) in
+                # the background, silenced, on its own agent. The chat carries
+                # on from before the question.
+                with run.lock:              # an event being sent completes first
+                    run.stop()
+                sess.agent = sess.new_agent(before)
+                outcome = {"kind": "cancelled"}
+            kind = outcome.get("kind", "cancelled")
+            if kind == "done":
                 writer.send("done", {})
-            except Cancelled:
+            elif kind == "cancelled":
+                sess.record("cancelled", {}, turn)
                 writer.send("cancelled", {})
-            except llm.ModelError as e:
-                writer.send("error", {"text": str(e)})
-            except Exception as e:      # keep the stream well-formed; log the rest
-                traceback.print_exc()
-                writer.send("error", {"text": f"Internal error: {e.__class__.__name__}: {e}"})
+            else:
+                sess.record("error", {"text": outcome["text"]}, turn)
+                writer.send("error", {"text": outcome["text"]})
+            sess.save_state(turn)
         finally:
             stop.set()
-            sess.writer = None
-            sess.cancelled.clear()
+            sess.run = None
             sess.lock.release()
 
     def _static(self, path: str):
@@ -540,11 +783,16 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(host=None, port=None, auth=None, open_browser=True) -> int:
     cfg = Config(host, port, auth)
-    server = ChatServer(cfg)
+    history = store.open_from_env()
+    server = ChatServer(cfg, history, chat_providers())
     where = f"http://{'127.0.0.1' if cfg.host in ('0.0.0.0', '::') else cfg.host}:{cfg.port}/"
     url = where + (f"?t={cfg.token}" if cfg.auth == "token" else "")
-    print(f"DQL chat on {where}  (LLM_PROVIDER={llm.provider_name()}, "
+    print(f"DQL chat on {where}  (providers: {', '.join(server.providers)}; "
           f"tenant {'connected' if server.can_run else 'not configured: queries are written, not run'})",
+          file=sys.stderr)
+    print(f"History: {history.path}, kept {history.retention_days or 'forever'}"
+          f"{' days' if history.retention_days else ''}" if history else
+          "History: off (DQL_CHAT_HISTORY=0); chats live in memory until restart",
           file=sys.stderr)
     if cfg.auth == "token":
         print(f"Open: {url}", file=sys.stderr)
@@ -567,4 +815,6 @@ def serve(host=None, port=None, auth=None, open_browser=True) -> int:
         pass
     finally:
         server.server_close()
+        if history:
+            history.close()
     return 0

@@ -18,6 +18,14 @@
   }
 
   var nodeTypes = null;   // created once: React Flow warns when it changes
+  var live = [];          // mounted graphs, redrawn when the theme changes
+
+  function colorMode() {
+    return window.DqlTheme ? window.DqlTheme.resolved() : "system";
+  }
+  if (window.DqlTheme) {
+    window.DqlTheme.onChange(function () { live.forEach(function (g) { g.render(); }); });
+  }
 
   function DqlNode(props) {
     var L = lib(), d = props.data || {};
@@ -63,18 +71,43 @@
         labelBgPadding: [4, 2], labelBgBorderRadius: 3
       });
     });
-    var children = [
-      L.h(L.RF.Background, { key: "bg", gap: 20, size: 1 }),
-      L.h(L.RF.Controls, { key: "ctl", showInteractive: false })
-    ];
-    if (nodes.length > 20) children.push(L.h(L.RF.MiniMap, { key: "map", pannable: true, zoomable: true }));
+    var FIT = { padding: 0.15, maxZoom: 1 };
     var root = window.ReactDOM.createRoot(box);
-    root.render(L.h(L.Flow, {
-      defaultNodes: nodes, defaultEdges: edges, nodeTypes: nodeTypes,
-      fitView: true, fitViewOptions: { padding: 0.15, maxZoom: 1 }, minZoom: 0.1, maxZoom: 2,
-      nodesConnectable: false, colorMode: "system"
-    }, children));
-    return function () { root.unmount(); };
+    var flow = null;          // the React Flow instance, for fitView
+    // defaultNodes are read once, so a re-render (colour mode, size) keeps
+    // whatever the reader has dragged, panned or zoomed.
+    var g = { expanded: false, render: function () {
+      var children = [
+        L.h(L.RF.Background, { key: "bg", gap: 20, size: 1 }),
+        L.h(L.RF.Controls, { key: "ctl", showInteractive: false, fitViewOptions: FIT })
+      ];
+      // The minimap earns its room only in the expanded view; at normal
+      // size it would cover nodes.
+      if (g.expanded && nodes.length > 20) {
+        children.push(L.h(L.RF.MiniMap, { key: "map", pannable: true, zoomable: true }));
+      }
+      root.render(L.h(L.Flow, {
+        defaultNodes: nodes, defaultEdges: edges, nodeTypes: nodeTypes,
+        fitView: true, fitViewOptions: FIT, minZoom: 0.1, maxZoom: 2,
+        nodesConnectable: false, colorMode: colorMode(),
+        onInit: function (inst) { flow = inst; }
+      }, children));
+    } };
+    g.render();
+    live.push(g);
+    var stop = function () {
+      live = live.filter(function (x) { return x !== g; });
+      root.unmount();
+    };
+    // Called when the card grows or shrinks: redraw, then fit the new box.
+    stop.resize = function (expanded) {
+      g.expanded = !!expanded;
+      g.render();
+      requestAnimationFrame(function () {
+        setTimeout(function () { if (flow) flow.fitView(expanded ? { padding: 0.08, maxZoom: 1.5 } : FIT); }, 60);
+      });
+    };
+    return stop;
   }
 
   function table(spec) {

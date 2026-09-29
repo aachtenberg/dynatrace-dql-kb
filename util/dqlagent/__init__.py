@@ -6,6 +6,7 @@ answers from the records. Standard library only.
     visuals  charts and graphs built from query results
     core     docs search, name lookup, the DQL check, tools and the agent loop
     web      the browser chat server
+    store    chat history and per-user settings, in SQLite
 
 Entry points: util/dql_agent.py (terminal) and util/dql_chat.py (browser).
 """

@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DQL chat</title>
+<link rel="icon" href="data:,">
+<script src="theme.js"></script>
 <link rel="stylesheet" href="vendor/xyflow-react.css">
 <link rel="stylesheet" href="app.css">
 <script src="vendor/react.production.min.js"></script>
@@ -16,38 +18,62 @@
 <script src="app.js" defer></script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">DQL chat</div>
-  <div class="meta" id="meta">Connecting…</div>
-  <div class="actions">
-    <label class="toggle" title="Queries run as soon as the model writes them. Each one is still checked for common DQL mistakes first.">
-      <input type="checkbox" id="auto"> Run queries without asking
-    </label>
-    <button type="button" id="btn-settings" class="ghost">Settings</button>
-    <button type="button" id="btn-new" class="ghost">New chat</button>
-  </div>
-</header>
+<div class="app" id="app">
+  <aside id="sidebar" class="sidebar" aria-label="Chats">
+    <div class="side-head">
+      <span class="brand">DQL chat</span>
+      <button type="button" id="btn-side-close" class="icon-btn narrow-only" aria-label="Close the chat list" data-icon="x"></button>
+    </div>
+    <button type="button" id="btn-new" class="new-chat"><span data-icon="new"></span><span>New chat</span></button>
+    <div class="side-label" id="recents-label">Recents</div>
+    <nav id="recents" class="recents" aria-labelledby="recents-label"></nav>
+    <p id="history-note" class="side-note"></p>
+  </aside>
+  <div class="scrim" id="scrim"></div>
 
-<main id="log" aria-live="polite"></main>
+  <div class="main">
+    <header class="topbar">
+      <button type="button" id="btn-side" class="icon-btn" aria-label="Show or hide the chat list" data-icon="sidebar"></button>
+      <div id="conv-title" class="conv-title">New chat</div>
+      <button type="button" id="problems-badge" class="pill problems-badge" hidden></button>
+      <div id="meta" class="meta">Connecting…</div>
+      <button type="button" id="btn-settings" class="icon-btn" aria-label="Settings" title="Settings (/config)" data-icon="settings"></button>
+    </header>
 
-<form id="composer" autocomplete="off">
-  <textarea id="input" rows="1" placeholder="Ask about your tenant, e.g. any open problems right now?"></textarea>
-  <button type="submit" id="send" class="primary">Send</button>
-</form>
+    <main id="log" aria-live="polite"></main>
 
-<aside id="settings" class="drawer" hidden aria-labelledby="settings-title">
-  <div class="drawer-head">
-    <h2 id="settings-title">Settings</h2>
-    <button type="button" id="settings-close" class="ghost" aria-label="Close settings">Close</button>
+    <form id="composer" class="composer" autocomplete="off">
+      <div id="slash" class="popover slash-menu" role="listbox" aria-label="Commands" hidden></div>
+      <div id="model-menu" class="popover model-menu" hidden>
+        <input id="model-search" type="text" spellcheck="false" placeholder="Search models, or type an id" aria-label="Search models">
+        <div id="model-list" class="model-list" role="listbox" aria-label="Models"></div>
+        <p id="model-msg" class="menu-msg"></p>
+      </div>
+      <div class="composer-box">
+        <textarea id="input" rows="1" placeholder="Ask about your tenant, or type / for commands" aria-label="Message"></textarea>
+        <div class="composer-bar">
+          <button type="button" id="mode" class="pill mode" aria-pressed="false"></button>
+          <span class="spacer"></span>
+          <button type="button" id="model-pill" class="pill model-pill" aria-haspopup="listbox" aria-expanded="false"></button>
+          <button type="submit" id="send" class="send" aria-label="Send" data-state="send" disabled></button>
+        </div>
+      </div>
+      <p class="composer-hint">Enter to send · Shift+Enter for a new line · Esc stops an answer · / for commands</p>
+    </form>
   </div>
-  <p id="settings-provider" class="muted"></p>
-  <form id="settings-form"></form>
-  <p id="settings-msg" class="settings-msg" role="status"></p>
-  <div class="drawer-actions">
-    <button type="button" id="settings-save" class="primary">Save</button>
-    <button type="button" id="settings-cancel" class="ghost">Cancel</button>
+</div>
+
+<div id="settings" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" id="settings-close" class="icon-btn" aria-label="Close settings" data-icon="x"></button>
+    </div>
+    <div id="settings-body" class="modal-body"></div>
+    <div class="modal-foot">
+      <p id="settings-msg" class="settings-msg" role="status"></p>
+    </div>
   </div>
-  <p class="muted small">Changing the model or region starts a new chat. Turns and output tokens apply from the next question.</p>
-</aside>
+</div>
 </body>
 </html>

@@ -89,13 +89,17 @@
   }
 
   // -- responsive rendering ---------------------------------------------
+  // Redraws when the width changes, and when an expanded card gives the
+  // chart a height to fill (h is 0 at normal size: the chart picks its own).
   function responsive(host, draw) {
-    var lastW = 0, timer = null;
+    var lastW = 0, lastH = -1, timer = null;
     function run() {
       var w = Math.max(320, Math.floor(host.clientWidth || 600));
-      if (w === lastW) return;
+      var h = host.closest && host.closest(".viz-card.expanded") ? Math.floor(host.clientHeight) : 0;
+      if (w === lastW && h === lastH) return;
       lastW = w;
-      draw(w);
+      lastH = h;
+      draw(w, h);
     }
     run();
     if (window.ResizeObserver) {
@@ -111,7 +115,8 @@
     var series = spec.series || [];
     var timed = spec.x === "time";
     host.textContent = "";
-    if (series.length >= 2) host.appendChild(legend(series.map(function (s) { return s.name; }), "line"));
+    var key = null;
+    if (series.length >= 2) host.appendChild(key = legend(series.map(function (s) { return s.name; }), "line"));
     var plot = el("div", "plot");
     plot.tabIndex = 0;
     plot.setAttribute("role", "img");
@@ -119,9 +124,10 @@
       " series. Use the table view for exact values; arrow keys move the readout.");
     host.appendChild(plot);
 
-    return responsive(host, function (W) {
+    return responsive(host, function (W, avail) {
       plot.textContent = "";
-      var H = 260;
+      // Expanded: fill the card below the legend. Normal: 260px.
+      var H = avail ? Math.max(260, avail - (key ? key.offsetHeight + 8 : 0) - 8) : 260;
       var xs = [], ys = [];
       series.forEach(function (s) {
         s.points.forEach(function (p) { xs.push(p[0]); if (p[1] !== null) ys.push(p[1]); });
