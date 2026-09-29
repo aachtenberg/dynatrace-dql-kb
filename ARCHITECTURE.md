@@ -103,7 +103,7 @@ sequenceDiagram
     B->>G: search_docs / find_names
     G-->>B: matching docs, real field names
     B->>G: run_dql, fetch dt.davis.problems
-    Note over G: local check for known mistakes; you approve, or say what to change
+    Note over G: local check for known mistakes, then you approve or say what to change
     G->>T: the query
     T-->>G: records, or Grail's error
     G-->>B: records or the error, and the model fixes the query and retries
