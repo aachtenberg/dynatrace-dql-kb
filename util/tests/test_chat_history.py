@@ -196,6 +196,24 @@ class ChatHistoryTest(unittest.TestCase):
         self.assertEqual(self.call("/api/conversations")[1]["conversations"], [])
         self.assertEqual(self.call("/api/conversation?id=conv-00004")[0], 404)
 
+    def test_delete_several_at_once_for_good(self):
+        for sid in ("conv-00010", "conv-00011", "conv-00012"):
+            self.ask(sid, f"draw it for {sid}")
+        status, body = self.call("/api/conversation/delete", {"session": "conv-00013",
+                                                             "ids": ["conv-00010", "conv-00011"]})
+        self.assertEqual((status, body["deleted"]), (200, 2))
+        self.assertEqual([c["id"] for c in self.call("/api/conversations")[1]["conversations"]], ["conv-00012"])
+        # Gone from the file too: no trash, no leftover text in free pages.
+        self.history.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        raw = open(self.db, "rb").read()
+        self.assertNotIn(b"draw it for conv-00010", raw)
+        self.assertIn(b"draw it for conv-00012", raw)
+        # Another user's ids are simply not found.
+        status, _ = self.call("/api/conversation/delete", {"session": "bob-000001", "ids": ["conv-00012"]}, user="bob")
+        self.assertEqual(status, 404)
+        status, _ = self.call("/api/conversation/delete", {"session": "conv-00013", "ids": []})
+        self.assertEqual(status, 400)
+
     def test_settings_are_per_user_and_survive_a_restart(self):
         status, cfg = self.call("/api/settings", {"session": "conv-00006", "values": {"max_turns": 7}})
         self.assertEqual(status, 200, cfg)

@@ -600,20 +600,29 @@ class Handler(BaseHTTPRequestHandler):
                     run.stop()
                 return self._json(200, {"ok": True})
             if path in ("/api/conversation/rename", "/api/conversation/delete"):
-                st, cid = self.server.store, str(body.get("id", ""))
+                st = self.server.store
                 if not st:
                     return self._json(400, {"error": "History is off on this server."})
-                if not SESSION_ID.match(cid):
+                # One id, or several ("ids") to delete at once.
+                ids = body.get("ids") if path.endswith("delete") and "ids" in body else [body.get("id", "")]
+                if not isinstance(ids, list) or not 1 <= len(ids) <= 200:
+                    raise ValueError("ids must be a list of 1 to 200 conversation ids.")
+                ids = [str(i) for i in ids]
+                if not all(SESSION_ID.match(i) for i in ids):
                     raise ValueError("Missing or malformed conversation id.")
                 if path.endswith("rename"):
-                    ok = st.rename(user, cid, str(body.get("title") or ""))
-                else:
-                    other = self.server.sessions.get(f"{user}\x00{cid}")
-                    if other and other.lock.locked():
-                        return self._json(409, {"error": "Still answering in that chat; stop it first."})
-                    ok = st.delete(user, cid)
-                    self.server.drop(user, cid)
-                return self._json(200 if ok else 404, {"ok": ok} if ok else {"error": "No such conversation."})
+                    ok = st.rename(user, ids[0], str(body.get("title") or ""))
+                    return self._json(200 if ok else 404, {"ok": ok} if ok else {"error": "No such conversation."})
+                busy = [i for i in ids if (s := self.server.sessions.get(f"{user}\x00{i}")) and s.lock.locked()]
+                if busy:
+                    return self._json(409, {"error": "Still answering in a chat you picked; stop it first."})
+                deleted = 0
+                for i in ids:
+                    deleted += st.delete(user, i)
+                    self.server.drop(user, i)
+                if not deleted:
+                    return self._json(404, {"error": "No such conversation."})
+                return self._json(200, {"ok": True, "deleted": deleted})
             if path == "/api/settings":
                 if not self.server.cfg.allow_settings:
                     return self._json(403, {"error": "Settings are fixed on this server."})
