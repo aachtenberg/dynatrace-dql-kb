@@ -683,16 +683,75 @@
     }
   }
 
+  // -- select several chats to delete at once --------------------------------
+  var selecting = false, selected = {};
+  function setSelecting(on) {
+    selecting = on;
+    selected = {};
+    renderRecents();
+  }
+  function renderSelectBar() {
+    var n = Object.keys(selected).length;
+    $("#select-bar").hidden = !selecting;
+    $("#btn-select").textContent = selecting ? "Done" : "Select";
+    $("#sel-delete").disabled = !n;
+    $("#sel-delete").textContent = n ? "Delete " + n : "Delete";
+    $("#sel-all").textContent = n && n === state.conversations.length ? "Select none" : "Select all";
+  }
+  $("#btn-select").addEventListener("click", function () { setSelecting(!selecting); });
+  $("#sel-cancel").addEventListener("click", function () { setSelecting(false); });
+  $("#sel-all").addEventListener("click", function () {
+    var all = Object.keys(selected).length === state.conversations.length;
+    selected = {};
+    if (!all) state.conversations.forEach(function (c) { selected[c.id] = true; });
+    renderRecents();
+  });
+  $("#sel-delete").addEventListener("click", function () {
+    deleteChats(Object.keys(selected)).then(function () { setSelecting(false); });
+  });
+
+  // Deleting removes the chat and its query results from the server for
+  // good; there is no trash to restore from.
+  function deleteChats(ids) {
+    if (!ids.length) return Promise.resolve();
+    return api("/api/conversation/delete", { ids: ids }).then(function () {
+      var gone = {};
+      ids.forEach(function (id) { gone[id] = true; });
+      state.conversations = state.conversations.filter(function (x) { return !gone[x.id]; });
+      if (gone[state.session]) newChat();
+      else renderRecents();
+    }).catch(function (e) { noteLine("Could not delete: " + e.message); });
+  }
+
   function renderRecents() {
     var nav = $("#recents");
     closeRowMenu();
     nav.textContent = "";
-    $("#recents-label").hidden = !state.history;
+    $("#recents-head").hidden = !state.history;
+    if (!state.history || !state.conversations.length) selecting = false;
+    $("#btn-select").hidden = !state.conversations.length;
+    renderSelectBar();
     if (!state.history) return;
     if (!state.conversations.length) { nav.appendChild(el("p", "side-note", "No chats yet.")); return; }
     state.conversations.forEach(function (c) {
       var row = el("div", "recent" + (c.id === state.session ? " current" : ""));
       row.dataset.id = c.id;
+      if (selecting) {
+        var lab = el("label", "recent-pick");
+        var box = el("input");
+        box.type = "checkbox";
+        box.checked = !!selected[c.id];
+        box.addEventListener("change", function () {
+          if (box.checked) selected[c.id] = true; else delete selected[c.id];
+          renderSelectBar();
+        });
+        lab.appendChild(box);
+        lab.appendChild(el("span", "recent-title", c.title || "Untitled"));
+        lab.appendChild(el("span", "recent-when", when(c.updated)));
+        row.appendChild(lab);
+        nav.appendChild(row);
+        return;
+      }
       var open = button(null, "recent-open", function () { openConversation(c.id); closeSideIfNarrow(); });
       open.appendChild(el("span", "recent-title", c.title || "Untitled"));
       open.appendChild(el("span", "recent-when", when(c.updated)));
@@ -727,13 +786,8 @@
     var rename = button("Rename", "menu-item", function () { closeRowMenu(); startRename(row, c); });
     var del = button("Delete", "menu-item danger", function (ev) {
       ev.stopPropagation();
-      if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = "Delete for good?"; return; }
       closeRowMenu();
-      api("/api/conversation/delete", { id: c.id }).then(function () {
-        state.conversations = state.conversations.filter(function (x) { return x.id !== c.id; });
-        if (c.id === state.session) newChat();
-        else renderRecents();
-      }).catch(function (e) { noteLine("Could not delete: " + e.message); });
+      deleteChats([c.id]);
     });
     [rename, del].forEach(function (b) { b.setAttribute("role", "menuitem"); m.appendChild(b); });
     row.appendChild(m);
@@ -1312,6 +1366,7 @@
     if (!modelMenu.hidden) { closeModelMenu(); input.focus(); return; }
     if (!slash.hidden) { slash.hidden = true; return; }
     if (rowMenuEl) { closeRowMenu(); return; }
+    if (selecting) { setSelecting(false); return; }
     if (app.classList.contains("side-open")) { app.classList.remove("side-open"); return; }
     if (state.busy && !(ev.target.closest && ev.target.closest(".qprompt"))) cancel();
   });

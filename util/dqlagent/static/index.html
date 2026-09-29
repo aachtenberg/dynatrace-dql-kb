@@ -25,7 +25,16 @@
       <button type="button" id="btn-side-close" class="icon-btn narrow-only" aria-label="Close the chat list" data-icon="x"></button>
     </div>
     <button type="button" id="btn-new" class="new-chat"><span data-icon="new"></span><span>New chat</span></button>
-    <div class="side-label" id="recents-label">Recents</div>
+    <div class="side-label-row" id="recents-head">
+      <span class="side-label" id="recents-label">Recents</span>
+      <button type="button" id="btn-select" class="link-btn">Select</button>
+    </div>
+    <div id="select-bar" class="select-bar" hidden>
+      <button type="button" id="sel-all" class="link-btn">Select all</button>
+      <span class="spacer"></span>
+      <button type="button" id="sel-delete" class="danger-btn" disabled>Delete</button>
+      <button type="button" id="sel-cancel" class="ghost">Cancel</button>
+    </div>
     <nav id="recents" class="recents" aria-labelledby="recents-label"></nav>
     <p id="history-note" class="side-note"></p>
   </aside>

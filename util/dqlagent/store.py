@@ -113,6 +113,8 @@ class Store:
         with self.lock:
             if path != ":memory:":
                 self.db.execute("PRAGMA journal_mode=WAL")
+            # A deleted chat is overwritten on disk, not left in free pages.
+            self.db.execute("PRAGMA secure_delete=ON")
             self.db.executescript(SCHEMA)
         self._pruned = 0.0
         self.prune()

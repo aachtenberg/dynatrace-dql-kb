@@ -62,7 +62,7 @@ The server runs two fixed read-only queries for this (an exact count, and the ne
 
 **Recents.** The sidebar lists your chats, newest first, titled by the first question. Open one to see it again, graphs included, and keep asking. The model still has its earlier messages and query results.
 
-**⋯** renames or deletes a chat. **New chat** starts another and leaves the current one in the list. A reload reopens the chat you were in.
+**⋯** renames or deletes a chat; **Select** picks several to delete at once. Delete is immediate and final: the chat and its query results are erased from the server, with no trash to restore from. **New chat** starts another and leaves the current one in the list. A reload reopens the chat you were in.
 
 ### Commands
 
