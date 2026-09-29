@@ -51,7 +51,16 @@ def _load_dotenv():
             continue
         key, _, val = line.partition("=")
         key = key.strip()
-        val = val.strip().strip('"').strip("'")
+        if val[:1].isspace() and val.lstrip().startswith("#"):
+            val = ""                           # KEY=     # only a comment
+        val = val.strip()
+        if val[:1] in ('"', "'"):              # quoted: take what is inside the quotes
+            end = val.find(val[0], 1)
+            val = val[1:end] if end > 0 else val[1:]
+        else:                                  # KEY=value   # a comment
+            for sep in (" #", "\t#"):
+                val = val.split(sep, 1)[0]
+            val = val.strip()
         if key and key not in os.environ:
             os.environ[key] = val
 
