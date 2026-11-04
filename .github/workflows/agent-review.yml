@@ -14,10 +14,6 @@ permissions:
   pull-requests: write
   issues: write
 
-concurrency:
-  group: agent-review-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
     # Same-repo PRs only, and /review only from the repo owner.
